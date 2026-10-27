@@ -1,0 +1,49 @@
+# SynaptiMesh BCI — root gitignore
+# NOTE: venv/, logs/, dist/ are REQUIRED locally and kept on disk.
+# They are ignored here so they are never committed to GitHub
+# (machine-specific paths, runtime data, binaries). Nothing ignored below is deleted.
+
+# Virtual environments (machine-specific, regenerable via requirements.txt)
+venv/
+.venv/
+ENV/
+
+# Python bytecode caches (regenerate on import)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller build outputs (regenerate via build_receiver.bat)
+build/
+dist/
+*.spec.bak
+
+# Runtime logs (required locally for monitoring/debugging, not for git)
+logs/
+*.log
+
+# Browser automation profile cache (regenerates on next run)
+.browser_profile/
+
+# Local secrets / environment (never commit credentials)
+.env
+.env.*
+*.pem
+*.key
+
+# Scratch / temp / backups
+*.tmp
+*.bak
+*.old
+scratch/
+evaluation_results*.csv
+
+# Archives (e.g. local 1 GB backup zips — distribute via Releases, not git)
+*.zip
+*.7z
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

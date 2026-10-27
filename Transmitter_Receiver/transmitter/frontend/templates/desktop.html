@@ -1,0 +1,1389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Synapti Mesh - Dynamic Liquid Glass UI</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js" integrity="sha384-mZLF4UVrpi/QTWPA7BjNPEnkIfRFn4ZEO3Qt/HFklTJBj/gBOV8G3HcKn4NfQblz" crossorigin="anonymous"></script>
+    <style>
+        @import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap");
+        /* -------------------------------------------------------------
+           DYNAMIC COLOR THEME & LIQUID GLASS SYSTEM
+           ------------------------------------------------------------- */
+        :root {
+            /* Default: Iridescent Pastel (Matching 3D Artwork) */
+            --bg-overlay: rgba(15, 12, 30, 0.35);
+            --accent-primary: #a78bfa;
+            --accent-primary-glow: rgba(167, 139, 250, 0.5);
+            --accent-secondary: #f472b6;
+            --accent-secondary-glow: rgba(244, 114, 182, 0.5);
+            --accent-tertiary: #38bdf8;
+            --accent-tertiary-glow: rgba(56, 189, 248, 0.5);
+            
+            --glass-bg: rgba(255, 255, 255, 0.15);
+            --glass-bg-hover: rgba(255, 255, 255, 0.22);
+            --glass-border: rgba(255, 255, 255, 0.35);
+            --glass-border-top: rgba(255, 255, 255, 0.75);
+            --glass-blur: blur(32px) saturate(210%);
+            --glass-shadow: 0 30px 60px -12px rgba(10, 14, 29, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.6);
+
+            --text-primary: #ffffff;
+            --text-secondary: rgba(255, 255, 255, 0.88);
+            --text-muted: rgba(255, 255, 255, 0.65);
+        }
+
+        /* Preset Theme Variations */
+        [data-theme="superhuman"] {
+            --bg-overlay: rgba(15, 23, 42, 0.45);
+            --accent-primary: #8b5cf6;
+            --accent-primary-glow: rgba(139, 92, 246, 0.5);
+            --accent-secondary: #ec4899;
+            --accent-secondary-glow: rgba(236, 72, 153, 0.5);
+            --accent-tertiary: #6366f1;
+            --glass-bg: rgba(255, 255, 255, 0.12);
+            --glass-border: rgba(255, 255, 255, 0.3);
+            --glass-border-top: rgba(255, 255, 255, 0.65);
+        }
+
+        [data-theme="cyber-amber"] {
+            --bg-overlay: rgba(9, 11, 16, 0.65);
+            --accent-primary: #ff9f43;
+            --accent-primary-glow: rgba(255, 159, 67, 0.5);
+            --accent-secondary: #00d2d3;
+            --accent-secondary-glow: rgba(0, 210, 211, 0.5);
+            --accent-tertiary: #54a0ff;
+            --glass-bg: rgba(22, 27, 38, 0.55);
+            --glass-border: rgba(255, 255, 255, 0.2);
+            --glass-border-top: rgba(255, 255, 255, 0.5);
+        }
+
+        [data-theme="emerald"] {
+            --bg-overlay: rgba(4, 30, 24, 0.5);
+            --accent-primary: #34d399;
+            --accent-primary-glow: rgba(52, 211, 153, 0.5);
+            --accent-secondary: #06b6d4;
+            --accent-secondary-glow: rgba(6, 182, 212, 0.5);
+            --accent-tertiary: #a7f3d0;
+            --glass-bg: rgba(255, 255, 255, 0.13);
+            --glass-border: rgba(52, 211, 153, 0.35);
+            --glass-border-top: rgba(255, 255, 255, 0.7);
+        }
+
+        [data-theme="sapphire"] {
+            --bg-overlay: rgba(10, 20, 45, 0.55);
+            --accent-primary: #60a5fa;
+            --accent-primary-glow: rgba(96, 165, 250, 0.5);
+            --accent-secondary: #818cf8;
+            --accent-secondary-glow: rgba(129, 140, 248, 0.5);
+            --accent-tertiary: #93c5fd;
+            --glass-bg: rgba(255, 255, 255, 0.13);
+            --glass-border: rgba(96, 165, 250, 0.35);
+            --glass-border-top: rgba(255, 255, 255, 0.7);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #090b10 !important;
+            color: var(--text-primary) !important;
+            min-height: 100vh !important;
+            padding: 36px 20px !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            position: relative !important;
+            overflow-x: hidden !important;
+        }
+
+        /* -------------------------------------------------------------
+           3D FLUID LIQUID ARTWORK BACKGROUND LAYER
+           ------------------------------------------------------------- */
+        .bg-artwork {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background-image: url('/static/liquid_bg.png');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            z-index: -2;
+            filter: brightness(0.9) contrast(1.15) saturate(1.1);
+            transition: all 0.6s ease;
+            animation: floatArt 25s infinite alternate ease-in-out;
+        }
+
+        .bg-artwork-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: var(--bg-overlay);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: -1;
+            transition: background 0.5s ease, backdrop-filter 0.5s ease;
+        }
+
+        @keyframes floatArt {
+            0% { transform: scale(1) translate(0, 0); }
+            50% { transform: scale(1.04) translate(15px, -10px); }
+            100% { transform: scale(1.02) translate(-10px, 15px); }
+        }
+
+        /* Top Header & Theme Switcher Dock */
+        .header-container {
+            max-width: 1080px;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 28px;
+            z-index: 1;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .brand-pill {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--glass-border);
+            border-top: 1.2px solid var(--glass-border-top);
+            padding: 10px 22px;
+            border-radius: 40px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+        }
+
+        .brand-logo {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            box-shadow: 0 0 20px var(--accent-primary-glow);
+            transition: all 0.4s ease;
+        }
+
+        .brand-text h1 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            color: #ffffff;
+        }
+
+        .brand-text p {
+            font-size: 0.75rem;
+            color: var(--accent-primary);
+            font-weight: 600;
+            transition: color 0.4s ease;
+        }
+
+        /* Theme Selector Bar */
+        .theme-selector-dock {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--glass-border);
+            border-top: 1.2px solid var(--glass-border-top);
+            padding: 6px 14px;
+            border-radius: 40px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            flex-wrap: wrap;
+        }
+
+        .theme-chip {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            user-select: none;
+            font-family: inherit;
+            line-height: inherit;
+        }
+
+        .theme-chip:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .theme-chip.active {
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)) !important;
+            color: #ffffff !important;
+            border-color: rgba(255, 255, 255, 0.6) !important;
+            box-shadow: 0 0 15px var(--accent-primary-glow) !important;
+        }
+
+        .theme-chip .color-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        /* -------------------------------------------------------------
+           3D FROSTED LIQUID GLASS CARDS
+           ------------------------------------------------------------- */
+        .dashboard-layout {
+            max-width: 1080px;
+            width: 100%;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            z-index: 1;
+        }
+
+        .glass-card {
+            position: relative;
+            background: var(--glass-bg) !important;
+            backdrop-filter: var(--glass-blur) !important;
+            -webkit-backdrop-filter: var(--glass-blur) !important;
+            border: 1px solid var(--glass-border) !important;
+            border-top: 1.5px solid var(--glass-border-top) !important;
+            border-radius: 28px !important;
+            padding: 32px !important;
+            box-shadow: var(--glass-shadow) !important;
+            transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1) !important;
+            overflow: hidden;
+        }
+
+        .glass-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 48%;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.25) 0%, rgba(255, 255, 255, 0.03) 60%, transparent 100%);
+            pointer-events: none;
+            border-top-left-radius: 28px;
+            border-top-right-radius: 28px;
+        }
+
+        .glass-card:hover {
+            background: var(--glass-bg-hover) !important;
+            transform: translateY(-6px) scale(1.008) !important;
+            border-color: rgba(255, 255, 255, 0.5) !important;
+            border-top-color: rgba(255, 255, 255, 0.9) !important;
+            box-shadow: 
+                0 35px 70px -15px rgba(0, 0, 0, 0.5),
+                0 0 35px var(--accent-primary-glow),
+                inset 0 1px 2px rgba(255, 255, 255, 0.7) !important;
+        }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        /* Card Headers */
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 22px;
+        }
+
+        h2 {
+            font-size: 0.85rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.6px;
+            color: rgba(255, 255, 255, 0.95);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header-icon {
+            width: 30px;
+            height: 30px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.18);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+        }
+
+        /* Track Info Typography */
+        h3#song-title {
+            font-size: 2rem;
+            font-weight: 800;
+            line-height: 1.25;
+            margin-bottom: 6px;
+            color: #ffffff;
+            letter-spacing: -0.5px;
+            text-shadow: 0 4px 15px rgba(0,0,0,0.4);
+        }
+
+        p#song-artist {
+            color: var(--text-secondary);
+            font-size: 1.05rem;
+            font-weight: 500;
+            margin-bottom: 22px;
+        }
+
+        /* Status Badges */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 18px;
+            border-radius: 30px;
+            font-size: 0.82rem;
+            font-weight: 700;
+            background: #064e3b;
+            color: #a7f3d0;
+            border: 1px solid rgba(52, 211, 153, 0.5);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 0 18px rgba(52, 211, 153, 0.35);
+        }
+
+        .status-badge::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #34d399;
+            box-shadow: 0 0 10px #34d399;
+            animation: pulse 1.8s infinite;
+        }
+
+        .status-paused {
+            background: rgba(255, 255, 255, 0.12);
+            color: var(--text-secondary);
+            border-color: rgba(255, 255, 255, 0.28);
+            box-shadow: none;
+        }
+
+        .status-paused::before {
+            background: var(--text-secondary);
+            box-shadow: none;
+            animation: none;
+        }
+
+        .volume-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 16px;
+            background: rgba(255, 255, 255, 0.14);
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--accent-primary);
+            border: 1px solid var(--glass-border);
+            transition: color 0.4s ease;
+        }
+
+        /* Progress Bar */
+        .volume-bar-container {
+            width: 100%;
+            height: 8px;
+            background: rgba(0, 0, 0, 0.35);
+            border-radius: 8px;
+            margin-top: 18px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+
+        .volume-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary), var(--accent-tertiary));
+            border-radius: 8px;
+            transition: width 0.3s cubic-bezier(0.16, 1, 0.3, 1), background 0.4s ease;
+            box-shadow: 0 0 15px var(--accent-primary-glow);
+        }
+
+        /* -------------------------------------------------------------
+           SUPERHUMAN FROSTED GEL BUTTONS
+           ------------------------------------------------------------- */
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+            gap: 12px;
+        }
+
+        button {
+            position: relative;
+            background-color: #1e1b4b;
+            background: rgba(30, 27, 75, 0.85);
+            backdrop-filter: var(--glass-blur);
+            -webkit-backdrop-filter: var(--glass-blur);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-top: 1.2px solid rgba(255, 255, 255, 0.6);
+            color: #ffffff;
+            padding: 13px 18px;
+            border-radius: 18px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            font-family: inherit;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+            overflow: hidden;
+        }
+
+        button::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 50%;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.25) 0%, transparent 100%);
+            pointer-events: none;
+        }
+
+        button:hover {
+            background: rgba(255, 255, 255, 0.24);
+            transform: translateY(-3px) scale(1.02);
+            border-color: rgba(255, 255, 255, 0.5);
+            border-top-color: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3), 0 0 20px var(--accent-primary-glow);
+        }
+
+        button:active {
+            transform: translateY(-1px) scale(0.97);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary)) !important;
+            border: 1px solid rgba(255, 255, 255, 0.5) !important;
+            border-top: 1.2px solid rgba(255, 255, 255, 0.85) !important;
+            box-shadow: 0 8px 25px var(--accent-primary-glow), inset 0 1px 0 rgba(255, 255, 255, 0.5) !important;
+            transition: all 0.4s ease !important;
+        }
+
+        .btn-primary:hover {
+            box-shadow: 0 14px 35px var(--accent-primary-glow), 0 0 25px var(--accent-secondary-glow) !important;
+            transform: translateY(-3px) scale(1.02) !important;
+        }
+
+        .btn-launch {
+            grid-column: 1 / -1;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.1));
+            border-color: rgba(255, 255, 255, 0.4);
+            border-top-color: rgba(255, 255, 255, 0.8);
+        }
+
+        .btn-launch:hover {
+            background: linear-gradient(135deg, var(--accent-secondary), var(--accent-tertiary));
+            box-shadow: 0 12px 35px var(--accent-secondary-glow);
+        }
+
+        .btn-automation {
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            border: 1.5px solid rgba(255, 255, 255, 0.6);
+            color: #ffffff;
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            box-shadow: 0 0 25px var(--accent-primary-glow), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .btn-automation:hover {
+            transform: translateY(-3px) scale(1.02);
+            box-shadow: 0 0 35px var(--accent-primary-glow), 0 0 20px var(--accent-secondary-glow);
+        }
+
+        .btn-automation.running {
+            background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+            border-color: rgba(255, 255, 255, 0.8) !important;
+            box-shadow: 0 0 30px rgba(239, 68, 68, 0.7) !important;
+            animation: pulse-danger 1.6s infinite;
+        }
+
+        @keyframes pulse-danger {
+            0%, 100% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.5); transform: scale(1); }
+            50% { box-shadow: 0 0 35px rgba(239, 68, 68, 0.9); transform: scale(1.01); }
+        }
+
+        .live-intent-card {
+            background: rgba(15, 23, 42, 0.75);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 18px;
+            padding: 18px 22px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            backdrop-filter: blur(16px);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.15), 0 8px 25px rgba(0,0,0,0.3);
+        }
+
+        /* -------------------------------------------------------------
+           FROSTED INPUTS & CUSTOM COLOR PICKERS
+           ------------------------------------------------------------- */
+        .search-container {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        input[type="text"] {
+            flex-grow: 1;
+            padding: 15px 20px;
+            background: rgba(0, 0, 0, 0.28);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 18px;
+            color: #ffffff;
+            font-size: 0.95rem;
+            font-family: inherit;
+            outline: none;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.35);
+        }
+
+        input[type="text"]:focus {
+            background: rgba(0, 0, 0, 0.45);
+            border-color: var(--accent-primary);
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.4), 0 0 22px var(--accent-primary-glow);
+        }
+
+        input[type="text"]::placeholder {
+            color: rgba(255, 255, 255, 0.55);
+        }
+
+        /* Settings Grid & Theme Customizer */
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 18px;
+            align-items: center;
+            margin-bottom: 22px;
+        }
+
+        .setting-item {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .setting-item label {
+            font-size: 0.88rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .setting-control {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        input[type="number"], input[type="range"], input[type="color"] {
+            background: rgba(0, 0, 0, 0.28);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            border-radius: 14px;
+            padding: 8px 12px;
+            color: #fff;
+            font-family: inherit;
+            outline: none;
+            backdrop-filter: var(--glass-blur);
+        }
+
+        input[type="color"] {
+            width: 48px;
+            height: 38px;
+            padding: 2px;
+            cursor: pointer;
+        }
+
+        input[type="range"] {
+            flex-grow: 1;
+            padding: 0;
+            accent-color: var(--accent-primary);
+            cursor: pointer;
+            height: 6px;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: #ffffff;
+            user-select: none;
+            padding: 8px 0;
+        }
+
+        .checkbox-label input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent-primary);
+            cursor: pointer;
+        }
+
+        /* -------------------------------------------------------------
+           SUPERHUMAN OBSIDIAN LOGS SLATE
+           ------------------------------------------------------------- */
+        #logs {
+            height: 220px;
+            overflow-y: auto;
+            background: rgba(10, 14, 26, 0.65);
+            backdrop-filter: var(--glass-blur);
+            padding: 20px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            color: #e2e8f0;
+            line-height: 1.65;
+            box-shadow: inset 0 4px 25px rgba(0,0,0,0.5);
+        }
+
+        #logs div {
+            margin-bottom: 6px;
+            display: flex;
+            align-items: flex-start;
+        }
+
+        #logs span.time {
+            color: var(--accent-primary);
+            margin-right: 12px;
+            font-weight: 500;
+            flex-shrink: 0;
+            transition: color 0.4s ease;
+        }
+
+        #logs span.msg {
+            color: #ffffff;
+        }
+
+        #logs::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        #logs::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #logs::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.25);
+            border-radius: 10px;
+        }
+
+        #logs::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-primary);
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-layout {
+                grid-template-columns: 1fr;
+            }
+            .header-container {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <style>
+        .back-master {
+            position: fixed;
+            bottom: 18px;
+            left: 18px;
+            z-index: 9999;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 16px;
+            border-radius: 999px;
+            background: rgba(15, 12, 30, 0.75);
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            -webkit-backdrop-filter: blur(14px);
+            backdrop-filter: blur(14px);
+            color: #fff;
+            font-family: "Plus Jakarta Sans", sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            text-decoration: none;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+            transition: transform 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+        .back-master:hover {
+            color: #a78bfa;
+            border-color: rgba(167, 139, 250, 0.8);
+            transform: translateY(-1px);
+        }
+    </style>
+    <a href="/master" class="back-master" title="Back to Master Hub" onclick="notifyFsmBack(); return true;">← Back to Master Hub</a>
+
+    <!-- 3D Liquid Artwork Background & Overlay Layer -->
+    <div class="bg-artwork" id="bgArtwork"></div>
+    <div class="bg-artwork-overlay" id="bgOverlay"></div>
+
+    <!-- Header Navigation & Theme Dock -->
+    <div class="header-container">
+        <div class="brand-pill">
+            <div class="brand-logo">✨</div>
+            <div class="brand-text">
+                <h1>Synapti Mesh Center</h1>
+                <p id="themeLabelText">Iridescent Liquid UI</p>
+            </div>
+        </div>
+
+        <!-- Color Theme Switcher Dock -->
+        <div class="theme-selector-dock">
+            <button type="button" class="theme-chip active" id="chip-iridescent" onclick="setWebsiteTheme('iridescent')">
+                <span class="color-dot" style="background: linear-gradient(135deg, #a78bfa, #f472b6);"></span> 🌸 Iridescent
+            </button>
+            <button type="button" class="theme-chip" id="chip-superhuman" onclick="setWebsiteTheme('superhuman')">
+                <span class="color-dot" style="background: linear-gradient(135deg, #8b5cf6, #ec4899);"></span> 💜 Superhuman
+            </button>
+            <button type="button" class="theme-chip" id="chip-cyber-amber" onclick="setWebsiteTheme('cyber-amber')">
+                <span class="color-dot" style="background: linear-gradient(135deg, #ff9f43, #00d2d3);"></span> ⚡ Cyber Amber
+            </button>
+            <button type="button" class="theme-chip" id="chip-emerald" onclick="setWebsiteTheme('emerald')">
+                <span class="color-dot" style="background: linear-gradient(135deg, #34d399, #06b6d4);"></span> 🌿 Emerald
+            </button>
+            <button type="button" class="theme-chip" id="chip-sapphire" onclick="setWebsiteTheme('sapphire')">
+                <span class="color-dot" style="background: linear-gradient(135deg, #60a5fa, #818cf8);"></span> 💎 Sapphire
+            </button>
+        </div>
+    </div>
+
+    <!-- 3D Frosted Glass Grid -->
+    <div class="dashboard-layout">
+        
+        <!-- Now Playing Card -->
+        <div class="glass-card">
+            <div class="card-header">
+                <h2><span class="header-icon">🎵</span> Now Playing</h2>
+                <span id="playback-status" class="status-badge status-paused">Paused</span>
+            </div>
+            
+            <h3 id="song-title">Waiting for Track...</h3>
+            <p id="song-artist">Unknown Artist</p>
+
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 14px;">
+                <span id="volumeBadge" class="volume-badge">🔊 Volume: 100%</span>
+            </div>
+
+            <div class="volume-bar-container">
+                <div class="volume-bar-fill" id="volumeBarFill" style="width: 100%;"></div>
+            </div>
+        </div>
+
+        <!-- Media Controls Card -->
+        <div class="glass-card">
+            <div class="card-header">
+                <h2><span class="header-icon">🎛️</span> Media Controls</h2>
+            </div>
+
+            <div class="button-grid">
+                <button class="btn-launch" id="btnOpenJioSaavn" onclick="sendAction('Launch JioSaavn', this)">🚀 Open JioSaavn Web App</button>
+                <button onclick="sendAction('Previous Track')">⏮ Previous</button>
+                <button onclick="sendAction('Play / Pause')">⏯ Play / Pause</button>
+                <button onclick="sendAction('Next Track')">Next ⏭</button>
+                <button onclick="sendAction('Volume Down')">🔉 Vol -</button>
+                <button onclick="sendAction('Volume Up')">🔊 Vol +</button>
+            </div>
+
+            <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.15);">
+                <div class="search-container">
+                    <input type="text" id="searchInput" placeholder="Search for a song, album, or playlist on JioSaavn...">
+                    <button class="btn-primary" onclick="sendSearch()">Search & Play</button>
+                </div>
+            </div>
+
+            <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.15);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <label for="uiVolumeSlider" style="font-weight: 600; font-size: 0.88rem; color: #ffffff;">🔊 Master Volume Slider</label>
+                    <span id="uiVolumeVal" style="font-weight: 700; color: var(--accent-primary); font-size: 0.9rem;">100%</span>
+                </div>
+                <input type="range" id="uiVolumeSlider" min="0" max="100" value="100" 
+                       onmousedown="window.isDraggingSlider = true;" 
+                       onmouseup="window.isDraggingSlider = false;" 
+                       ontouchstart="window.isDraggingSlider = true;" 
+                       ontouchend="window.isDraggingSlider = false;" 
+                       oninput="onSliderDrag(this.value)" 
+                       onchange="setSliderVolume(this.value); window.isDraggingSlider = false;" 
+                       style="width: 100%; cursor: pointer;">
+            </div>
+        </div>
+
+        <!-- Search & Automate Card -->
+        <div class="glass-card full-width">
+            <div class="card-header">
+                <h2><span class="header-icon">🤖</span> AI/ML BCI Automation & Search Engine</h2>
+                <span id="automationStatusBadge" class="status-badge status-paused">Loop Idle</span>
+            </div>
+
+            <!-- Primary Automation Toggle Button -->
+            <div style="margin-bottom: 18px;">
+                <button id="btnAutomation" class="btn-automation" style="width: 100%; padding: 16px 24px;" onclick="toggleAutomation()">
+                    ⚡ Start AI/ML Automation (Infinite Dataset Loop)
+                </button>
+            </div>
+
+            <!-- Real-time BCI Intent & Filter Monitor -->
+            <div class="live-intent-card">
+                <div>
+                    <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: var(--accent-primary); font-weight: 700; margin-bottom: 4px;">
+                        Current Brain Intent (Domain: AI_ML)
+                    </div>
+                    <div id="liveIntentLabel" style="font-size: 1.25rem; font-weight: 800; color: #ffffff;">
+                        Awaiting BCI Stream...
+                    </div>
+                    <div id="liveConfidenceText" style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px;">
+                        Confidence: --% · Cooldown: 2.0s
+                    </div>
+                </div>
+                <div style="text-align: right;">
+                    <span id="domainFilterTag" class="status-badge" style="background: #0c2d48; color: #7dd3fc; border-color: rgba(56, 189, 248, 0.4);">
+                        Target: AI_ML
+                    </span>
+                    <div class="volume-bar-container" style="width: 140px; height: 6px; margin-top: 10px;">
+                        <div id="confidenceBarFill" class="volume-bar-fill" style="width: 0%;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="button-grid">
+                <button onclick="sendBCI('LEFT')" title="LEFT → Play/Pause at Level 3">⏯ BCI Play/Pause</button>
+                <button onclick="sendBCI('PUSH')" title="PUSH → Next Track at Level 3">⏭ BCI Next</button>
+                <button onclick="sendBCI('PULL')" title="PULL → Previous Track at Level 3">⏮ BCI Prev</button>
+                <button onclick="sendBCI('RIGHT')" title="RIGHT → Search at Level 3">🔍 BCI Search</button>
+                <button onclick="sendBCISequence(['RIGHT','PUSH'])" title="RIGHT+PUSH → Volume Up (ordered double)">🔊 BCI Vol +</button>
+                <button onclick="sendBCISequence(['RIGHT','PULL'])" title="RIGHT+PULL → Volume Down (ordered double)">🔉 BCI Vol -</button>
+                <button onclick="sendBCISequence(['PUSH','RIGHT'])" title="PUSH+RIGHT → Back to Level 2">↩ BCI Back L2</button>
+                <button onclick="sendBCISequence(['PUSH','LEFT'])" title="PUSH+LEFT → Back to Level 1">🏠 BCI Back L1</button>
+            </div>
+            <div style="font-size: 0.75rem; color: var(--text-muted); text-align: center; margin-top: 8px;">BCI Test → FSM (4s window, 0.35) → Mapper → Router</div>
+        </div>
+
+        <!-- Live Theme Customizer & BCI Settings Card -->
+        <div class="glass-card full-width">
+            <div class="card-header">
+                <h2><span class="header-icon">🎨</span> Website Theme & BCI Settings</h2>
+            </div>
+
+            <div class="settings-grid">
+                <!-- Custom Color Theme Pickers -->
+                <div class="setting-item">
+                    <label for="primaryColorPicker">Primary Accent Color:</label>
+                    <div class="setting-control">
+                        <input type="color" id="primaryColorPicker" value="#a78bfa" onchange="applyCustomColors()">
+                        <span style="font-size: 0.85rem; color: var(--text-muted);">Main Buttons & Sheens</span>
+                    </div>
+                </div>
+
+                <div class="setting-item">
+                    <label for="secondaryColorPicker">Secondary Accent Color:</label>
+                    <div class="setting-control">
+                        <input type="color" id="secondaryColorPicker" value="#f472b6" onchange="applyCustomColors()">
+                        <span style="font-size: 0.85rem; color: var(--text-muted);">Glows & Highlights</span>
+                    </div>
+                </div>
+
+                <div class="setting-item">
+                    <label for="bgOverlaySlider">Background Opacity Tint: <span id="bgOpacityVal">35%</span></label>
+                    <div class="setting-control">
+                        <input type="range" id="bgOverlaySlider" min="0" max="90" value="35" oninput="updateBgOpacity(this.value)">
+                    </div>
+                </div>
+
+                <!-- BCI Settings -->
+                <div class="setting-item">
+                    <label for="confidenceRange">Confidence Threshold: <span id="confidenceVal" style="color: var(--accent-primary); font-weight:700;">0.60</span></label>
+                    <div class="setting-control">
+                        <input type="range" id="confidenceRange" min="0.10" max="0.95" step="0.05" value="0.60" oninput="document.getElementById('confidenceVal').innerText = this.value">
+                    </div>
+                </div>
+
+                <div class="setting-item">
+                    <label for="cooldownInput">Volume Cooldown (seconds):</label>
+                    <div class="setting-control">
+                        <input type="number" id="cooldownInput" min="0.5" max="10.0" step="0.5" value="3.0">
+                    </div>
+                </div>
+
+                <div class="setting-item">
+                    <span class="setting-title" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 8px;">Browser Options:</span>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="headlessToggle">
+                        Headless Browser Mode
+                    </label>
+                </div>
+            </div>
+
+            <button class="btn-primary" onclick="saveSettings()">Save & Apply Settings</button>
+        </div>
+
+        <!-- Execution Logs Card -->
+        <div class="glass-card full-width">
+            <div class="card-header">
+                <h2><span class="header-icon">💻</span> Real-Time System Logs</h2>
+            </div>
+
+            <div id="logs">
+                <div><span class="time">[System]</span><span class="msg">Dynamic Theme Engine initialized. 3D Liquid Artwork loaded.</span></div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Backend Socket & Theme Engine JS Logic -->
+    <script>
+        const socket = io('/desktop');
+
+        // -------------------------------------------------------------
+        // LIVE WEBSITE COLOR THEME ENGINE
+        // -------------------------------------------------------------
+        function setWebsiteTheme(themeName) {
+            document.documentElement.removeAttribute('style'); // Clear custom overrides
+            if (themeName === 'iridescent') {
+                delete document.documentElement.dataset.theme;
+            } else {
+                document.documentElement.dataset.theme = themeName;
+            }
+
+            // Update Active Theme Chip UI
+            document.querySelectorAll('.theme-chip').forEach(chip => chip.classList.remove('active'));
+            const activeChip = document.getElementById(`chip-${themeName}`);
+            if (activeChip) activeChip.classList.add('active');
+
+            // Update Label Text
+            const labelMap = {
+                'iridescent': 'Iridescent Liquid UI',
+                'superhuman': 'Superhuman Violet UI',
+                'cyber-amber': 'Cyber Amber UI',
+                'emerald': 'Emerald Nebula UI',
+                'sapphire': 'Midnight Sapphire UI'
+            };
+            document.getElementById('themeLabelText').innerText = labelMap[themeName] || 'Dynamic Liquid UI';
+
+            // Sync Color Pickers
+            const style = getComputedStyle(document.documentElement);
+            const pri = style.getPropertyValue('--accent-primary').trim();
+            const sec = style.getPropertyValue('--accent-secondary').trim();
+            if (pri && document.getElementById('primaryColorPicker')) {
+                document.getElementById('primaryColorPicker').value = pri.startsWith('#') ? pri : '#a78bfa';
+            }
+            if (sec && document.getElementById('secondaryColorPicker')) {
+                document.getElementById('secondaryColorPicker').value = sec.startsWith('#') ? sec : '#f472b6';
+            }
+
+            // Save to localStorage
+            localStorage.setItem('selectedWebsiteTheme', themeName);
+        }
+
+        function applyCustomColors() {
+            const pri = document.getElementById('primaryColorPicker').value;
+            const sec = document.getElementById('secondaryColorPicker').value;
+            
+            document.documentElement.style.setProperty('--accent-primary', pri);
+            document.documentElement.style.setProperty('--accent-primary-glow', hexToRgba(pri, 0.5));
+            document.documentElement.style.setProperty('--accent-secondary', sec);
+            document.documentElement.style.setProperty('--accent-secondary-glow', hexToRgba(sec, 0.5));
+            
+            document.querySelectorAll('.theme-chip').forEach(chip => chip.classList.remove('active'));
+            document.getElementById('themeLabelText').innerText = 'Custom Color Palette';
+            localStorage.setItem('customPrimaryColor', pri);
+            localStorage.setItem('customSecondaryColor', sec);
+            localStorage.setItem('selectedWebsiteTheme', 'custom');
+        }
+
+        function updateBgOpacity(val) {
+            document.getElementById('bgOpacityVal').innerText = `${val}%`;
+            const overlay = document.getElementById('bgOverlay');
+            if (overlay) {
+                overlay.style.background = `rgba(15, 12, 30, ${val / 100})`;
+            }
+            localStorage.setItem('bgOverlayOpacity', val);
+        }
+
+        function hexToRgba(hex, alpha) {
+            let c = hex.replace('#', '');
+            if (c.length === 3) c = c.split('').map(x => x + x).join('');
+            const num = Number.parseInt(c, 16);
+            return `rgba(${(num >> 16) & 255}, ${(num >> 8) & 255}, ${num & 255}, ${alpha})`;
+        }
+
+        function loadSavedTheme() {
+            const savedTheme = localStorage.getItem('selectedWebsiteTheme') || 'iridescent';
+            if (savedTheme === 'custom') {
+                const pri = localStorage.getItem('customPrimaryColor');
+                const sec = localStorage.getItem('customSecondaryColor');
+                if (pri && sec) {
+                    document.getElementById('primaryColorPicker').value = pri;
+                    document.getElementById('secondaryColorPicker').value = sec;
+                    applyCustomColors();
+                }
+            } else {
+                setWebsiteTheme(savedTheme);
+            }
+
+            const savedOpacity = localStorage.getItem('bgOverlayOpacity');
+            if (savedOpacity) {
+                document.getElementById('bgOverlaySlider').value = savedOpacity;
+                updateBgOpacity(savedOpacity);
+            }
+        }
+
+        function getVolumeIcon(pct) {
+            if (pct === 0) return "🔇";
+            if (pct < 50) return "🔉";
+            return "🔊";
+        }
+
+        // -------------------------------------------------------------
+        // BACKEND SOCKET & CONTROLLER HANDLERS
+        // -------------------------------------------------------------
+        socket.on('status_update', function(data) {
+            document.getElementById('song-title').innerText = data.title;
+            document.getElementById('song-artist').innerText = data.artist;
+            
+            const statusBadge = document.getElementById('playback-status');
+            if (data.is_playing) {
+                statusBadge.innerText = "Playing";
+                statusBadge.classList.remove('status-paused');
+            } else {
+                statusBadge.innerText = "Paused";
+                statusBadge.classList.add('status-paused');
+            }
+
+            if (data.volume !== undefined) {
+                const volPct = Math.round(data.volume);
+                const volIcon = getVolumeIcon(volPct);
+                
+                document.getElementById('volumeBadge').innerText = `${volIcon} Volume: ${volPct}%`;
+                document.getElementById('volumeBarFill').style.width = `${volPct}%`;
+                
+                const uiSlider = document.getElementById('uiVolumeSlider');
+                if (uiSlider && uiSlider.value !== volPct.toString() && !globalThis.isDraggingSlider) {
+                    uiSlider.value = volPct;
+                }
+                const uiVal = document.getElementById('uiVolumeVal');
+                if (uiVal) {
+                    uiVal.innerText = `${volPct}%`;
+                }
+            }
+        });
+
+        socket.on('log_update', function(data) {
+            const logs = document.getElementById('logs');
+            const timeString = new Date().toLocaleTimeString([], { hour12: false });
+            logs.innerHTML += `<div><span class="time">[${timeString}]</span><span class="msg">${data.message}</span></div>`;
+            logs.scrollTop = logs.scrollHeight;
+        });
+
+        function changeVolUI(delta) {
+            const badge = document.getElementById('volumeBadge');
+            const fill = document.getElementById('volumeBarFill');
+            if (!badge || !fill) return;
+            let current = Number.parseInt(badge.innerText.replace(/\D/g, '')) || 100;
+            let next = Math.max(0, Math.min(100, current + delta));
+            let icon = getVolumeIcon(next);
+            
+            badge.innerText = `${icon} Volume: ${next}%`;
+            fill.style.width = `${next}%`;
+            
+            const uiSlider = document.getElementById('uiVolumeSlider');
+            if (uiSlider) uiSlider.value = next;
+            const uiVal = document.getElementById('uiVolumeVal');
+            if (uiVal) uiVal.innerText = `${next}%`;
+        }
+
+        function updateVolumeUI(volPct) {
+            const val = Math.round(volPct);
+            const volIcon = getVolumeIcon(val);
+            
+            const badge = document.getElementById('volumeBadge');
+            const fill = document.getElementById('volumeBarFill');
+            const slider = document.getElementById('uiVolumeSlider');
+            const label = document.getElementById('uiVolumeVal');
+            
+            if (badge) badge.innerText = `${volIcon} Volume: ${val}%`;
+            if (fill) fill.style.width = `${val}%`;
+            if (slider) slider.value = val;
+            if (label) label.innerText = `${val}%`;
+        }
+
+        function onSliderDrag(val) {
+            updateVolumeUI(val);
+        }
+
+        function performSearch() {
+            let query = (document.getElementById('searchQuery').value || "").trim();
+            if (!query) {
+                query = "Inaam";
+                document.getElementById('searchQuery').value = "Inaam";
+            }
+
+            document.getElementById('searchQuery').disabled = true;
+            document.getElementById('btnSearch').disabled = true;
+            document.getElementById('btnSearch').innerText = "Searching...";
+
+            fetch('/api/action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: "Search Album/Playlist", query: query })
+            })
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('searchQuery').disabled = false;
+                document.getElementById('btnSearch').disabled = false;
+                document.getElementById('btnSearch').innerText = "Search & Play";
+                if (data.status === 'success') {
+                    document.getElementById('searchQuery').value = '';
+                }
+            })
+            .catch(err => {
+                console.error("Search fetch error:", err);
+                document.getElementById('searchQuery').disabled = false;
+                document.getElementById('btnSearch').disabled = false;
+                document.getElementById('btnSearch').innerText = "Search & Play";
+            });
+        }
+
+        function setSliderVolume(val) {
+            fetch('/api/volume', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ volume: Number(val) })
+            });
+        }
+
+        function sendAction(actionName) {
+            if (actionName === 'Open JioSaavn' || actionName === 'Launch JioSaavn') {
+                window.open('https://www.jiosaavn.com', '_blank', 'noopener,noreferrer');
+                return;
+            }
+
+            if (actionName === 'Volume Up' || actionName === 'Volume Down') {
+                const uiSlider = document.getElementById('uiVolumeSlider');
+                if (uiSlider) {
+                    let curr = Number.parseInt(uiSlider.value) || 100;
+                    let next = actionName === 'Volume Up' ? Math.min(100, curr + 10) : Math.max(0, curr - 10);
+                    updateVolumeUI(next);
+                }
+            }
+
+            fetch('/api/action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: actionName })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.volume !== undefined) {
+                    updateVolumeUI(data.volume);
+                }
+            })
+            .catch(err => console.error("Action fetch error:", err));
+        }
+
+        function toggleAutomation() {
+            fetch('/api/automation', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'toggle' })
+            })
+            .then(res => res.json())
+            .then(data => {
+                updateAutomationUI(data.automation_active);
+            })
+            .catch(err => console.error("Automation toggle error:", err));
+        }
+
+        function updateAutomationUI(isActive) {
+            const btn = document.getElementById('btnAutomation');
+            const badge = document.getElementById('automationStatusBadge');
+            if (isActive) {
+                if (btn) {
+                    btn.innerText = '⏹ Stop AI/ML BCI Automation';
+                    btn.classList.add('running');
+                }
+                if (badge) {
+                    badge.innerText = 'Loop Active (AI_ML)';
+                    badge.classList.remove('status-paused');
+                }
+            } else {
+                if (btn) {
+                    btn.innerText = '⚡ Start AI/ML Automation (Infinite Dataset Loop)';
+                    btn.classList.remove('running');
+                }
+                if (badge) {
+                    badge.innerText = 'Loop Idle';
+                    badge.classList.add('status-paused');
+                }
+            }
+        }
+
+        function sendManualCommand(cmd) {
+            // Immediate visual feedback on Intent Monitor
+            const intentEl = document.getElementById('liveIntentLabel');
+            const confText = document.getElementById('liveConfidenceText');
+            const confBar = document.getElementById('confidenceBarFill');
+            if (intentEl) intentEl.innerText = cmd.replaceAll('_', ' ');
+            if (confText) confText.innerText = 'Confidence: 95% · Domain: AI_ML · Manual Dispatch';
+            if (confBar) confBar.style.width = '95%';
+
+            // Emit to backend socket
+            socket.emit('manual_command', { raw_command: cmd, confidence: 0.95 });
+
+            // Post to /api/action for direct execution
+            fetch('/api/action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: cmd })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.volume !== undefined) updateVolumeUI(data.volume);
+            })
+            .catch(err => console.error("Manual command dispatch error:", err));
+        }
+
+        // New BCI testing via FSM (same as live Cortex) - single path via HTTP only
+        function sendBCI(cmd) {
+            fetch('/api/bci/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command: cmd, confidence: 0.95 })
+            }).catch(function(e){ console.error("BCI test error", e); });
+        }
+        function sendBCISequence(cmds) {
+            if (!cmds || cmds.length===0) return;
+            if (cmds.length===1) { sendBCI(cmds[0]); }
+            else { sendBCI(cmds[0]); setTimeout(function(){ sendBCI(cmds[1]); }, 300); }
+        }
+
+        socket.on('command_dispatched', function(data) {
+            const intentEl = document.getElementById('liveIntentLabel');
+            const confText = document.getElementById('liveConfidenceText');
+            const confBar = document.getElementById('confidenceBarFill');
+            
+            if (intentEl) intentEl.innerText = data.display_label || data.action || data.command;
+            const confPct = Math.round((data.confidence || 0) * 100);
+            if (confText) confText.innerText = `Confidence: ${confPct}% · Domain: ${data.domain || 'AI_ML'} · Sample #${data.sample || 0}`;
+            if (confBar) confBar.style.width = `${confPct}%`;
+        });
+
+        socket.on('automation_update', function(data) {
+            updateAutomationUI(data.is_running);
+        });
+
+        function sendSearch() {
+            const query = document.getElementById('searchInput').value;
+            if (query) {
+                fetch('/api/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query })
+                });
+                document.getElementById('searchInput').value = '';
+            }
+        }
+
+        function triggerAutomation(routine) {
+            toggleAutomation();
+        }
+        
+        document.getElementById("searchInput").addEventListener("keypress", function(event) {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                sendSearch();
+            }
+        });
+
+        function fetchSettings() {
+            fetch('/api/config')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success' && data.config) {
+                        const cfg = data.config;
+                        document.getElementById('confidenceRange').value = cfg.confidence_threshold;
+                        document.getElementById('confidenceVal').innerText = cfg.confidence_threshold;
+                        document.getElementById('cooldownInput').value = cfg.volume_cooldown;
+                        document.getElementById('headlessToggle').checked = cfg.headless;
+                    }
+                })
+                .catch(err => console.error("Failed to fetch config:", err));
+
+            fetch('/api/automation')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.automation_active !== undefined) {
+                        updateAutomationUI(data.automation_active);
+                    }
+                })
+                .catch(() => {});
+        }
+
+        function saveSettings() {
+            const confidence = Number.parseFloat(document.getElementById('confidenceRange').value);
+            const cooldown = Number.parseFloat(document.getElementById('cooldownInput').value);
+            const headless = document.getElementById('headlessToggle').checked;
+
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    confidence_threshold: confidence,
+                    volume_cooldown: cooldown,
+                    headless: headless
+                })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    socket.emit('log_update', {message: '⚙️ Applied new BCI filter and engine settings from Dashboard.'});
+                }
+            });
+        }
+
+        socket.on('config_update', function(cfg) {
+            document.getElementById('confidenceRange').value = cfg.confidence_threshold;
+            document.getElementById('confidenceVal').innerText = cfg.confidence_threshold;
+            document.getElementById('cooldownInput').value = cfg.volume_cooldown;
+            document.getElementById('headlessToggle').checked = cfg.headless;
+        });
+
+        globalThis.addEventListener('DOMContentLoaded', function() {
+            loadSavedTheme();
+            fetchSettings();
+        });
+
+        function notifyFsmBack() {
+          fetch("/api/fsm/back", { method: "POST", keepalive: true }).catch(function () {});
+        }
+    </script>
+</body>
+</html>

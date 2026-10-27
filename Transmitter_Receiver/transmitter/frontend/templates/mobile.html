@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>NEURODRIVE — BRAIN MUSIC COMMAND CENTER</title>
+    <script src="https://cdn.tailwindcss.com" integrity="sha384-igm5BeiBt36UU4gqwWS7imYmelpTsZlQ45FZf+XBn9MuJbn4nQr7yx1yFydocC/K" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js" integrity="sha384-ZCmVL/dTQHh41JxtZe73klDRFSJ/zixGCGt5lhnLQGjSWfAnlXSg+GSnRACaK5lc" crossorigin="anonymous"></script>
+
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Share+Tech+Mono&display=swap");
+      body {
+        background-color: #060913;
+        color: #94a3b8;
+        font-family: "Share Tech Mono", monospace;
+        background-image:
+          linear-gradient(rgba(14, 23, 42, 0.5) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(14, 23, 42, 0.5) 1px, transparent 1px);
+        background-size: 30px 30px;
+      }
+
+      .font-orbitron {
+        font-family: "Orbitron", sans-serif;
+      }
+      .card-panel {
+        background: rgba(10, 15, 29, 0.85);
+        border: 1px solid rgba(30, 41, 59, 0.8);
+      }
+      .neon-text-cyan {
+        color: #00f6ff;
+        text-shadow: 0 0 10px rgba(0, 246, 255, 0.5);
+      }
+      .neon-text-pink {
+        color: #d946ef;
+        text-shadow: 0 0 10px rgba(217, 70, 239, 0.5);
+      }
+
+      .bar-glow-cyan {
+        background: linear-gradient(90deg, #00f6ff, #0284c7);
+        box-shadow: 0 0 10px rgba(0, 246, 255, 0.6);
+      }
+      .bar-glow-pink {
+        background: linear-gradient(90deg, #d946ef, #8b5cf6);
+        box-shadow: 0 0 10px rgba(217, 70, 239, 0.6);
+      }
+
+      ::-webkit-scrollbar {
+        width: 4px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #060913;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #1e293b;
+        border-radius: 2px;
+      }
+    </style>
+  </head>
+
+  <body class="min-h-screen p-4 flex flex-col justify-between text-xs">
+    <style>
+      .back-master {
+        position: fixed;
+        bottom: 14px;
+        left: 14px;
+        z-index: 9999;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgba(10, 15, 29, 0.92);
+        border: 1px solid rgba(30, 41, 59, 0.9);
+        color: #94a3b8;
+        font-family: "Share Tech Mono", monospace;
+        font-size: 11px;
+        letter-spacing: 0.5px;
+        text-decoration: none;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        transition: color 0.18s ease, border-color 0.18s ease;
+      }
+      .back-master:hover {
+        color: #00f6ff;
+        border-color: rgba(0, 246, 255, 0.5);
+      }
+    </style>
+    <a href="/master" class="back-master" title="Back to Master Hub"
+      onclick="notifyFsmBack(); return true;"
+      >← Back to Master Hub</a
+    >
+    <div>
+      <!-- HEADER BAR -->
+      <header
+        class="card-panel p-3 rounded mb-4 flex justify-between items-center border-cyan-500/20"
+      >
+        <div class="flex items-center gap-4">
+          <div
+            class="w-7 h-7 rounded border border-cyan-500/40 flex items-center justify-center font-orbitron font-extrabold text-cyan-400 bg-cyan-950/30"
+          >
+            N
+          </div>
+          <div>
+            <h1
+              class="font-orbitron font-extrabold text-sm tracking-widest text-slate-100 flex items-center gap-2"
+            >
+              NEURODRIVE
+            </h1>
+            <p class="text-[9px] tracking-wider text-slate-500">
+              BRAIN · MUSIC · COMMAND CENTER
+            </p>
+          </div>
+          <div class="flex items-center gap-4 ml-6 text-[10px]">
+            <span class="flex items-center gap-1.5"
+              ><span
+                class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"
+              ></span>
+              PIPELINE ACTIVE</span
+            >
+            <span class="flex items-center gap-1.5 text-slate-400"
+              ><span class="w-2 h-2 rounded-full bg-emerald-400"></span> MQTT
+              LINK</span
+            >
+            <span class="flex items-center gap-1.5 text-slate-400"
+              ><span class="w-2 h-2 rounded-full bg-emerald-400"></span> RTT
+              36ms</span
+            >
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button
+            id="pauseBtn"
+            onclick="togglePause()"
+            class="bg-emerald-950/60 border border-emerald-500/50 hover:bg-emerald-900/80 text-emerald-400 font-orbitron font-bold px-4 py-1.5 rounded text-[10px] tracking-wider"
+          >
+            ▶ RESUME
+          </button>
+          <span id="utcTime" class="text-slate-400 text-[10px] tracking-widest"
+            >--:--:-- UTC</span
+          >
+        </div>
+      </header>
+
+      <!-- TOP METRICS GRID -->
+      <div class="grid grid-cols-4 gap-4 mb-4">
+        <div class="card-panel p-3 rounded">
+          <div class="text-[10px] text-slate-500 tracking-wider mb-1">
+            SIGNAL QUALITY
+          </div>
+          <div class="font-orbitron text-2xl font-bold neon-text-cyan mb-2">
+            92%
+          </div>
+          <div class="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
+            <div class="bar-glow-cyan h-full w-[92%]"></div>
+          </div>
+        </div>
+
+        <div class="card-panel p-3 rounded">
+          <div class="text-[10px] text-slate-500 tracking-wider mb-1">
+            MODEL CONFIDENCE
+          </div>
+          <div class="font-orbitron text-2xl font-bold neon-text-pink mb-2">
+            96%
+          </div>
+          <div class="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
+            <div class="bar-glow-pink h-full w-[96%]"></div>
+          </div>
+        </div>
+
+        <div class="card-panel p-3 rounded">
+          <div class="text-[10px] text-slate-500 tracking-wider mb-1">
+            END-TO-END LATENCY
+          </div>
+          <div class="font-orbitron text-2xl font-bold neon-text-cyan mb-2">
+            36 <span class="text-sm font-normal">ms</span>
+          </div>
+          <div class="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
+            <div class="bar-glow-cyan h-full w-[35%]"></div>
+          </div>
+        </div>
+
+        <div class="card-panel p-3 rounded">
+          <div class="text-[10px] text-slate-500 tracking-wider mb-1">
+            ACK RATE
+          </div>
+          <div class="font-orbitron text-2xl font-bold text-fuchsia-400 mb-2">
+            100%
+          </div>
+          <div class="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
+            <div class="bar-glow-pink h-full w-[100%]"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MAIN MIDDLE SECTION -->
+      <div class="grid grid-cols-3 gap-4">
+        <!-- LEFT 2 COLUMNS -->
+        <div class="col-span-2 space-y-4">
+          <!-- EEG STREAM GRAPH CANVAS -->
+          <div class="card-panel p-4 rounded">
+            <div class="flex justify-between items-center mb-2">
+              <h2
+                class="font-orbitron text-xs font-bold tracking-widest text-slate-200"
+              >
+                EEG SIGNAL STREAM
+              </h2>
+              <span class="text-[9px] text-slate-500"
+                >8 channel · 250 Hz · MI-CNN v3.2</span
+              >
+            </div>
+            <canvas id="eegCanvas" class="w-full h-32"></canvas>
+          </div>
+
+          <!-- MOTOR IMAGERY CLASSIFIER -->
+          <div class="card-panel p-4 rounded">
+            <div class="flex justify-between items-start mb-2">
+              <div>
+                <h2
+                  class="font-orbitron text-xs font-bold tracking-widest text-slate-200"
+                >
+                  MOTOR IMAGERY CLASSIFIER
+                </h2>
+                <p class="text-[9px] text-slate-500 mt-1">CURRENT INTENT</p>
+                <div
+                  id="liveIntent"
+                  class="font-orbitron text-2xl font-black neon-text-cyan mt-1"
+                >
+                  Awaiting Command
+                </div>
+                <p
+                  id="intentConfidence"
+                  class="text-[10px] text-slate-400 mt-1"
+                >
+                  confidence --% · idle
+                </p>
+              </div>
+
+              <!-- BCI TEST COMMANDS (New FSM) - Restored Level 3 UI with new mappings -->
+              <div class="grid grid-cols-3 gap-2 w-80">
+                <button
+                  onclick="sendBCI('LEFT')"
+                  class="card-panel hover:border-cyan-500/50 p-2 text-center text-slate-300 rounded font-orbitron text-[10px]"
+                  title="LEFT → Play/Pause at Level 3 (via FSM)"
+                >
+                  Play / Pause
+                </button>
+                <button
+                  onclick="sendBCI('PUSH')"
+                  class="card-panel hover:border-cyan-500/50 p-2 text-center text-slate-300 rounded font-orbitron text-[10px]"
+                  title="PUSH → Next Track at Level 3"
+                >
+                  Next Track
+                </button>
+                <button
+                  onclick="sendBCI('PULL')"
+                  class="card-panel hover:border-cyan-500/50 p-2 text-center text-slate-300 rounded font-orbitron text-[10px]"
+                  title="PULL → Previous Track at Level 3"
+                >
+                  Previous
+                </button>
+                <button
+                  onclick="sendBCISequence(['RIGHT','PUSH'])"
+                  class="card-panel hover:border-cyan-500/50 p-2 text-center text-slate-300 rounded font-orbitron text-[10px]"
+                  title="RIGHT+PUSH → Volume Up (ordered double)"
+                >
+                  Volume +
+                </button>
+                <button
+                  onclick="sendBCISequence(['RIGHT','PULL'])"
+                  class="card-panel hover:border-cyan-500/50 p-2 text-center text-slate-300 rounded font-orbitron text-[10px]"
+                  title="RIGHT+PULL → Volume Down (ordered double)"
+                >
+                  Volume -
+                </button>
+                <button
+                  onclick="sendBCI('RIGHT')"
+                  class="card-panel hover:border-cyan-500/50 p-2 text-center text-slate-300 rounded font-orbitron text-[10px]"
+                  title="RIGHT → Search at Level 3"
+                >
+                  🔍 Search
+                </button>
+                <button
+                  onclick="sendBCISequence(['PUSH','RIGHT'])"
+                  class="card-panel hover:border-cyan-500/50 p-2 text-center text-slate-300 rounded font-orbitron text-[10px]"
+                  title="PUSH+RIGHT → Back to Level 2 (Sub-Master)"
+                >
+                  Back to Level 2
+                </button>
+                <button
+                  onclick="sendBCISequence(['PUSH','LEFT'])"
+                  class="card-panel hover:border-cyan-500/50 p-2 text-center text-slate-300 rounded font-orbitron text-[10px]"
+                  title="PUSH+LEFT → Back to Level 1 (AI/ML)"
+                >
+                  Back to Level 1
+                </button>
+              </div>
+            </div>
+
+            <!-- INTERACTIVE SEARCH INPUT BAR (Hidden by default) -->
+            <div
+              id="searchBarContainer"
+              class="hidden mt-3 pt-3 border-t border-slate-800/80"
+            >
+              <div class="flex items-center gap-2">
+                <span
+                  class="text-cyan-400 font-orbitron text-[10px] tracking-wider"
+                  >LIVE SEARCH:</span
+                >
+                <input
+                  id="searchInput"
+                  type="text"
+                  placeholder="Type song or artist name to stream to JioSaavn..."
+                  oninput="handleSearchTyping(this.value)"
+                  class="flex-1 bg-[#03050a] border border-cyan-500/50 focus:border-cyan-400 text-slate-100 px-3 py-1.5 rounded outline-none font-mono text-xs shadow-inner"
+                />
+                <button
+                  onclick="closeSearchBar()"
+                  class="bg-slate-800 hover:bg-slate-700 text-slate-400 px-2.5 py-1.5 rounded font-orbitron text-[10px]"
+                >
+                  ✕ CLOSE
+                </button>
+              </div>
+            </div>
+
+            <div
+              class="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden mt-3"
+            >
+              <div id="intentBar" class="bar-glow-pink h-full w-[0%]"></div>
+            </div>
+          </div>
+
+          <!-- COMMAND QUEUE TABLE -->
+          <div class="card-panel p-4 rounded">
+            <div class="flex justify-between items-center mb-3">
+              <h2
+                class="font-orbitron text-xs font-bold tracking-widest text-slate-200"
+              >
+                COMMAND QUEUE
+              </h2>
+              <span class="text-[9px] text-slate-500"
+                >5 recent · debounced · ACK tracked</span
+              >
+            </div>
+
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr
+                  class="text-[10px] text-slate-500 border-b border-slate-800/80 pb-2"
+                >
+                  <th class="py-1">TIME</th>
+                  <th class="py-1">COMMAND</th>
+                  <th class="py-1">CONF</th>
+                  <th class="py-1">STATUS</th>
+                  <th class="py-1 text-right">RTT</th>
+                </tr>
+              </thead>
+              <tbody
+                id="commandTableBody"
+                class="divide-y divide-slate-800/40 text-[11px] text-slate-300"
+              ></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- RIGHT COLUMN: JIOSAAVN PLAYER, MQTT & TERMINAL -->
+        <div class="space-y-4">
+          <!-- JIOSAAVN NOW PLAYING -->
+          <div class="card-panel p-4 rounded border-cyan-500/20">
+            <div class="flex justify-between items-center mb-3">
+              <h2
+                class="font-orbitron text-xs font-bold tracking-widest text-slate-200"
+              >
+                JIOSAAVN · NOW PLAYING
+              </h2>
+              <span
+                id="playerPlaybackStatus"
+                class="text-[9px] text-cyan-400 tracking-widest"
+                >idle</span
+              >
+            </div>
+
+            <div class="flex gap-3 items-center mb-3">
+              <div
+                class="w-16 h-16 rounded border border-cyan-500/30 overflow-hidden bg-slate-900 flex-shrink-0 relative flex items-center justify-center"
+              >
+                <img
+                  id="playerAlbumArt"
+                  src=""
+                  alt="Album Artwork"
+                  class="w-full h-full object-cover shadow-lg hidden"
+                />
+                <div
+                  id="artFallback"
+                  class="w-full h-full flex flex-col items-center justify-center bg-slate-900 text-cyan-500"
+                >
+                  <svg
+                    class="w-7 h-7"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="1.5"
+                      d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12 0c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
+                    ></path>
+                  </svg>
+                </div>
+              </div>
+
+              <div class="flex-1 overflow-hidden">
+                <div
+                  id="playerTrack"
+                  class="font-orbitron font-bold text-slate-100 truncate text-sm"
+                >
+                  Awaiting Track...
+                </div>
+                <div
+                  id="playerArtist"
+                  class="text-slate-400 text-[11px] truncate mt-0.5"
+                >
+                  JioSaavn Active Stream
+                </div>
+                <div class="text-[9px] text-slate-500 mt-1">JioSaavn</div>
+              </div>
+            </div>
+
+            <div class="space-y-1">
+              <div class="flex justify-between text-[10px] text-slate-500">
+                <span id="playerCurrentTime">0:00</span>
+                <span id="playerTotalTime">0:00</span>
+              </div>
+              <div class="w-full bg-slate-900 h-1 rounded-full overflow-hidden">
+                <div
+                  id="playerProgressBar"
+                  class="bar-glow-cyan h-full w-[0%]"
+                ></div>
+              </div>
+            </div>
+
+            <div
+              class="flex items-center gap-2 mt-3 text-[10px] text-slate-500"
+            >
+              <span>VOL</span>
+              <div class="flex-1 bg-slate-900 h-1 rounded-full overflow-hidden">
+                <div id="volumeBar" class="bar-glow-cyan h-full w-[70%]"></div>
+              </div>
+              <span id="volPercent">70%</span>
+            </div>
+          </div>
+
+          <!-- MQTT BRIDGE PANEL -->
+          <div class="card-panel p-4 rounded text-[11px] space-y-1.5">
+            <div class="flex justify-between items-center mb-2">
+              <h2
+                class="font-orbitron text-xs font-bold tracking-widest text-slate-200"
+              >
+                MQTT BRIDGE
+              </h2>
+              <span class="text-[9px] text-slate-500"
+                >APH accessibility target</span
+              >
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-500">STATUS</span
+              ><span id="mqttStatus" class="text-red-400 font-bold"
+                >OFFLINE</span
+              >
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-500">BROKER</span
+              ><span class="text-slate-300">tcp://52.21.249.6:1883</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-500">PUBLISH</span
+              ><span class="text-cyan-400">aiml/rohan/commands</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-500">SUBSCRIBE</span
+              ><span class="text-cyan-400">aiml/rohan/ack</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-500">STATUS TOPIC</span
+              ><span class="text-cyan-400">aiml/rohan/status</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-500">QoS</span
+              ><span class="text-slate-300">1 (at least once)</span>
+            </div>
+          </div>
+
+          <!-- SYSTEM TERMINAL LOG -->
+          <div class="card-panel p-4 rounded">
+            <div class="flex justify-between items-center mb-2">
+              <h2
+                class="font-orbitron text-xs font-bold tracking-widest text-slate-200"
+              >
+                SYSTEM TERMINAL
+              </h2>
+              <span class="text-[9px] text-slate-500"
+                >thread-safe log aggregator</span
+              >
+            </div>
+
+            <div
+              id="systemTerminal"
+              class="bg-[#03050a] p-2.5 rounded border border-slate-800/80 h-44 overflow-y-auto font-mono text-[10px] space-y-1"
+            ></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FOOTER -->
+    <footer
+      class="mt-4 pt-2 border-t border-slate-800/60 text-center text-[10px] text-slate-600 tracking-widest"
+    >
+      NEURODRIVE · v3.9.4-mock · orchestrator online · brain -> beat in
+      &lt;100ms
+    </footer>
+
+    <script>
+      const socket = io('/mobile');
+      const terminal = document.getElementById("systemTerminal");
+      const tableBody = document.getElementById("commandTableBody");
+      let searchDebounceTimer = null;
+
+      const playerAlbumArtEl = document.getElementById("playerAlbumArt");
+      const artFallbackEl = document.getElementById("artFallback");
+      if (playerAlbumArtEl && artFallbackEl) {
+        playerAlbumArtEl.addEventListener("error", function () {
+          playerAlbumArtEl.style.display = "none";
+          artFallbackEl.style.display = "flex";
+        });
+        playerAlbumArtEl.addEventListener("load", function () {
+          playerAlbumArtEl.style.display = "block";
+          artFallbackEl.style.display = "none";
+        });
+      }
+
+      // Clock
+      function updateClock() {
+        const now = new Date();
+        document.getElementById("utcTime").innerText =
+          now.toISOString().substr(11, 8) + " UTC";
+      }
+      setInterval(updateClock, 1000);
+      updateClock();
+
+      // Sync state with server upon connecting
+      socket.on("sync_state", function (data) {
+        const btn = document.getElementById("pauseBtn");
+        if (data.is_paused) {
+          btn.innerText = "▶ RESUME";
+          btn.className =
+            "bg-emerald-950/60 border border-emerald-500/50 hover:bg-emerald-900/80 text-emerald-400 font-orbitron font-bold px-4 py-1.5 rounded text-[10px] tracking-wider";
+        } else {
+          btn.innerText = "■ HALT";
+          btn.className =
+            "bg-red-950/60 border border-red-500/50 hover:bg-red-900/80 text-red-400 font-orbitron font-bold px-4 py-1.5 rounded text-[10px] tracking-wider";
+        }
+      });
+
+      // MQTT connection status update
+      socket.on("mqtt_connection_status", function (data) {
+        const statusEl = document.getElementById("mqttStatus");
+        if (data.status === "CONNECTED") {
+          statusEl.innerText = "CONNECTED";
+          statusEl.className = "text-emerald-400 font-bold";
+        } else {
+          statusEl.innerText = "OFFLINE";
+          statusEl.className = "text-red-400 font-bold";
+        }
+      });
+
+      // Canvas EEG Signal Generator
+      const canvas = document.getElementById("eegCanvas");
+      const ctx = canvas.getContext("2d");
+      let step = 0;
+
+      function drawWaveSegment(context, startX, endX, yBase, freq1, freq2, stepOffset, strokeColor) {
+        context.beginPath();
+        context.strokeStyle = strokeColor;
+        context.lineWidth = 1;
+        for (let x = startX; x < endX; x += 2) {
+          const y = yBase + Math.sin((x + stepOffset) * freq1) * 8 + (freq2 ? Math.cos((x + step) * freq2) * 4 : 0);
+          if (x === startX) context.moveTo(x, y);
+          else context.lineTo(x, y);
+        }
+        context.stroke();
+      }
+
+      function drawEEG() {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const h = canvas.height / 4;
+        const midX = canvas.width / 2;
+
+        for (let i = 0; i < 4; i++) {
+          const yBase = i * h + h / 2;
+          const col1 = i % 2 === 0 ? "#00f6ff" : "#d946ef";
+          const col2 = i % 2 === 0 ? "#d946ef" : "#00f6ff";
+
+          drawWaveSegment(ctx, 0, midX, yBase, 0.05, 0.02, step + i * 20, col1);
+          drawWaveSegment(ctx, midX, canvas.width, yBase, 0.04, 0, step + i * 15, col2);
+        }
+        step += 2;
+        requestAnimationFrame(drawEEG);
+      }
+      drawEEG();
+
+      // Log update
+      socket.on("log_message", function (data) {
+        const line = document.createElement("div");
+        const timeStr = new Date().toISOString().substr(11, 12);
+
+        if (data.message.includes("[MQTT]")) line.className = "text-cyan-400";
+        else if (data.message.includes("[APK]"))
+          line.className = "text-emerald-400";
+        else if (data.message.includes("[JIOSAAVN REALTIME]"))
+          line.className = "text-fuchsia-400 font-bold";
+        else line.className = "text-slate-400";
+
+        line.innerText = `[${timeStr}] ${data.message}`;
+        terminal.appendChild(line);
+        terminal.scrollTop = terminal.scrollHeight;
+      });
+
+      // REAL-TIME JIOSAAVN PLAYER SYNC VIA SOCKET
+      socket.on("media_update", function (data) {
+        if (!data) return;
+
+        const title =
+          data.title ||
+          data.song ||
+          data.song_name ||
+          data.track ||
+          data.track_name;
+        const artist =
+          data.artist ||
+          data.singers ||
+          data.artist_name ||
+          data.subtitle ||
+          data.artistName;
+        const albumArt =
+          data.album_art ||
+          data.art ||
+          data.artwork ||
+          data.cover ||
+          data.image_url ||
+          data.imageUrl;
+        const status =
+          data.status || data.state || (data.is_playing ? "streaming" : null);
+
+        if (title && title.trim() !== "") {
+          document.getElementById("playerTrack").innerText = title;
+        }
+        if (artist && artist.trim() !== "") {
+          document.getElementById("playerArtist").innerText = artist;
+        }
+        if (status) {
+          document.getElementById("playerPlaybackStatus").innerText = status;
+        }
+        if (albumArt && albumArt.trim() !== "") {
+          const img = document.getElementById("playerAlbumArt");
+          img.src = albumArt;
+        }
+
+        if (data.current_time !== undefined)
+          document.getElementById("playerCurrentTime").innerText =
+            data.current_time;
+        if (data.total_time !== undefined)
+          document.getElementById("playerTotalTime").innerText =
+            data.total_time;
+        if (data.progress_percent !== undefined)
+          document.getElementById("playerProgressBar").style.width =
+            `${data.progress_percent}%`;
+
+        if (data.volume !== undefined) {
+          document.getElementById("volumeBar").style.width = `${data.volume}%`;
+          document.getElementById("volPercent").innerText = `${data.volume}%`;
+        }
+      });
+
+      // Command Dispatched Event Listener
+      socket.on("command_dispatched", function (data) {
+        const cmd = data.command;
+        const displayLabel = data.display_label || cmd;
+
+        document.getElementById("liveIntent").innerText = displayLabel;
+        const conf = Math.round(data.confidence * 100);
+        document.getElementById("intentConfidence").innerText =
+          `confidence ${conf}% · dispatching`;
+        document.getElementById("intentBar").style.width = `${conf}%`;
+
+        // Add to Command Table
+        const row = document.createElement("tr");
+        const timeStr = new Date().toISOString().substr(11, 8);
+        row.innerHTML = `
+        <td class="py-2 text-slate-500">${timeStr}</td>
+        <td class="py-2 font-bold text-slate-200">${displayLabel}</td>
+        <td class="py-2 text-slate-400">${conf}%</td>
+        <td class="py-2"><span class="px-1.5 py-0.5 rounded border border-cyan-500/40 bg-cyan-950/30 text-cyan-400 text-[9px]">QUEUED</span></td>
+        <td class="py-2 text-right text-slate-400">--</td>
+      `;
+        tableBody.insertBefore(row, tableBody.firstChild);
+        if (tableBody.children.length > 5 && tableBody.lastChild)
+          tableBody.lastChild.remove();
+      });
+
+      function getSecureRandomLatency() {
+        if (typeof globalThis.crypto?.getRandomValues === 'function') {
+          const buf = new Uint32Array(1);
+          globalThis.crypto.getRandomValues(buf);
+          return Math.floor((buf[0] / 0xffffffff) * 80 + 120);
+        }
+        return 160;
+      }
+
+      // Handle ACK feedback from MQTT payload
+      socket.on("execution_feedback", function (data) {
+        if (tableBody.firstChild) {
+          const statusTd = tableBody.firstChild.children[3];
+          statusTd.innerHTML = `<span class="px-1.5 py-0.5 rounded border border-emerald-500/40 bg-emerald-950/30 text-emerald-400 text-[9px]">ACK</span>`;
+          tableBody.firstChild.children[4].innerText = `${getSecureRandomLatency()}ms`;
+        }
+      });
+
+      function togglePause() {
+        const btn = document.getElementById("pauseBtn");
+        const isCurrentlyPaused = btn.innerText.includes("RESUME");
+        const shouldPause = !isCurrentlyPaused;
+
+        socket.emit("toggle_pause", { paused: shouldPause });
+
+        if (shouldPause) {
+          btn.innerText = "▶ RESUME";
+          btn.className =
+            "bg-emerald-950/60 border border-emerald-500/50 hover:bg-emerald-900/80 text-emerald-400 font-orbitron font-bold px-4 py-1.5 rounded text-[10px] tracking-wider";
+        } else {
+          btn.innerText = "■ HALT";
+          btn.className =
+            "bg-red-950/60 border border-red-500/50 hover:bg-red-900/80 text-red-400 font-orbitron font-bold px-4 py-1.5 rounded text-[10px] tracking-wider";
+        }
+      }
+
+      function sendManual(rawKey) {
+        socket.emit("manual_command", {
+          raw_command: rawKey,
+          confidence: 0.95,
+        });
+      }
+
+      // New BCI testing via FSM (same as live Cortex) - single path via HTTP only
+      function sendBCI(cmd) {
+        fetch("/api/bci/command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: cmd, confidence: 0.95 }),
+        }).catch(function (e) { console.error("BCI test error", e); });
+      }
+
+      function sendBCISequence(cmds) {
+        // For ordered doubles: send two commands within 4s window via FSM
+        if (!cmds || cmds.length === 0) return;
+        if (cmds.length === 1) {
+          sendBCI(cmds[0]);
+        } else {
+          sendBCI(cmds[0]);
+          setTimeout(function() { sendBCI(cmds[1]); }, 300);
+        }
+      }
+
+      // SEARCH BAR HANDLERS
+      function handleSearchButtonClick() {
+        const container = document.getElementById("searchBarContainer");
+        container.classList.remove("hidden");
+        const input = document.getElementById("searchInput");
+        input.focus();
+
+        // Trigger initial macro to focus search bar in JioSaavn
+        sendManual("Right_Search_Playlist");
+      }
+
+      function closeSearchBar() {
+        const container = document.getElementById("searchBarContainer");
+        container.classList.add("hidden");
+        document.getElementById("searchInput").value = "";
+      }
+
+      function handleSearchTyping(value) {
+        clearTimeout(searchDebounceTimer);
+        if (!value || !value.trim()) return;
+
+        searchDebounceTimer = setTimeout(() => {
+          socket.emit("live_search_input", { query: value.trim() });
+        }, 300);
+      }
+
+      function notifyFsmBack() {
+        fetch("/api/fsm/back", { method: "POST", keepalive: true }).catch(function () {});
+      }
+    </script>
+  </body>
+</html>

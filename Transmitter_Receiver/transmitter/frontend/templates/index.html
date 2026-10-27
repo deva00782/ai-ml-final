@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JioSaavn Master Hub</title>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="{{ url_for('static', filename='favicon.svg') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/style.css') }}"
+    />
+  </head>
+
+  <body>
+    <div class="hub-wrap">
+      <div class="glow glow-one"></div>
+      <div class="glow glow-two"></div>
+
+      <main class="hub-card">
+        <div class="hub-head">
+          <div class="hub-logo">JM</div>
+          <h1 class="hub-title">JioSaavn Master Hub</h1>
+          <p class="hub-sub">Select the dashboard you want to operate</p>
+        </div>
+
+        <div class="hub-grid">
+          <a href="/mobile" class="hub-tile tile-mobile">
+            <span class="tile-icon">📱</span>
+            <span class="tile-name">Mobile Dashboard</span>
+            <span class="tile-desc">Control JioSaavn on Android via MQTT</span>
+            <span class="tile-go">Open Dashboard →</span>
+          </a>
+
+          <a href="/desktop" class="hub-tile tile-desktop">
+            <span class="tile-icon">🖥️</span>
+            <span class="tile-name">Desktop Dashboard</span>
+            <span class="tile-desc">Control JioSaavn Web via Selenium</span>
+            <span class="tile-go">Open Dashboard →</span>
+          </a>
+        </div>
+
+        <section class="fsm-panel">
+          <div class="fsm-head">
+            <span class="fsm-title">FSM Command System</span>
+            <span id="fsmState" class="fsm-state">DOMAIN_SELECTION</span>
+          </div>
+          <p class="fsm-hint">
+            <b>PUSH</b> opens Mobile · <b>PULL</b> opens Desktop directly.
+            For the selection flow: <b>RIGHT</b> = AI/ML domain →
+            <b>PUSH</b>/<b>PULL</b> select → <b>▶ Start Automation</b> opens.
+            Once open: <b>PUSH</b> Next · <b>PULL</b> Prev ·
+            <b>LEFT</b> Play/Pause · <b>RIGHT</b>+push/pull/left/right =
+            volume / search / back. <b>↺ Reset</b> to start over.
+          </p>
+          <div class="fsm-buttons">
+            <button class="fsm-btn" data-cmd="push">PUSH</button>
+            <button class="fsm-btn" data-cmd="pull">PULL</button>
+            <button class="fsm-btn" data-cmd="left">LEFT</button>
+            <button class="fsm-btn" data-cmd="right">RIGHT</button>
+            <button id="fsmStart" class="fsm-btn fsm-start">▶ Start Automation</button>
+            <button id="fsmReset" class="fsm-btn fsm-reset">↺ Reset FSM</button>
+          </div>
+          <div id="fsmLog" class="fsm-log"></div>
+        </section>
+
+        <!-- BCI Command Monitoring UI -->
+        <section class="bci-panel">
+          <div class="bci-grid">
+            <div class="bci-card">
+              <div class="bci-card-head">LATEST BCI COMMAND</div>
+              <div id="latestCommand" class="bci-latest-cmd">Waiting for BCI command...</div>
+              <div id="latestConfidence" class="bci-meta">Confidence: --</div>
+              <div id="latestLevel" class="bci-meta">Level: --</div>
+              <div id="latestState" class="bci-meta">State: --</div>
+              <div id="latestAction" class="bci-action">Action: --</div>
+              <div id="latestLatency" class="bci-meta">Latency: --</div>
+            </div>
+            <div class="bci-card">
+              <div class="bci-card-head">CURRENT FSM STATE</div>
+              <div id="currentState" class="bci-current-state">SUB_MASTER_DASHBOARD</div>
+              <div id="currentStateLabel" class="bci-meta">Sub-Master Level 2</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="history-panel">
+          <div class="history-head">COMMAND HISTORY</div>
+          <div id="commandHistory" class="history-list">
+            <div class="history-empty">No commands received yet.</div>
+          </div>
+        </section>
+
+        <div class="hub-foot">
+          <span id="utcClock">--:--:-- UTC</span>
+          <span class="sep">·</span>
+          <span>routes&nbsp;:&nbsp;/master · /mobile · /desktop</span>
+          <span class="sep">·</span>
+          <span>connections persist while you switch</span>
+        </div>
+      </main>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js" integrity="sha384-ZCmVL/dTQHh41JxtZe73klDRFSJ/zixGCGt5lhnLQGjSWfAnlXSg+GSnRACaK5lc" crossorigin="anonymous"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  </body>
+</html>

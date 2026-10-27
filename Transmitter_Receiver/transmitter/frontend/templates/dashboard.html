@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SynaptiMesh — Unified BCI Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}"/>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}"/>
+</head>
+<body>
+<div class="dashboard">
+  <div class="glow glow-one"></div><div class="glow glow-two"></div>
+  <div class="shell">
+
+    <!-- Header -->
+    <header class="dash-header">
+      <div class="header-left">
+        <div class="hub-logo">SM</div>
+        <div style="min-width:0">
+          <h1 class="header-title">SYNAPTIMESH BCI</h1>
+          <p class="header-sub">Unified BCI Control & Monitoring Dashboard</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <span class="status-pill"><span class="status-dot"></span> SYSTEM CONNECTED</span>
+        <span id="targetBadge" class="target-badge none">TARGET: NONE</span>
+        <div id="mobileDeviceSelectorWrapper" class="device-picker-container">
+          <button id="devicePickerBtn" class="device-picker-btn" type="button" aria-haspopup="listbox" aria-expanded="false" title="Click to view & select registered devices">
+            <span class="device-picker-icon" id="devicePickerIcon">📱</span>
+            <span id="activeDeviceLabel" class="device-picker-label">rohan</span>
+            <span id="activeDeviceTypeBadge" class="device-type-badge android">ANDROID</span>
+            <span class="device-picker-arrow">▾</span>
+          </button>
+          <div id="devicePickerDropdown" class="device-picker-dropdown" style="display: none;">
+            <div class="device-search-bar">
+              <span class="search-icon">🔍</span>
+              <input type="text" id="deviceSearchInput" placeholder="Filter devices or OS..." autocomplete="off" />
+              <span id="deviceCountBadge" class="device-count">1</span>
+            </div>
+            <div id="deviceListContainer" class="device-list" role="listbox">
+            </div>
+          </div>
+        </div>
+        <span id="fsmState" class="fsm-state-pill">SUB_MASTER_DASHBOARD</span>
+      </div>
+    </header>
+
+    <!-- Level Progress -->
+    <div class="level-bar">
+      <div id="lvl1" class="level-step"><span class="level-icon">✓</span> L1 DOMAIN</div>
+      <div class="level-conn" id="conn1"></div>
+      <div id="lvl2" class="level-step active"><span class="level-icon">●</span> L2 DASHBOARD</div>
+      <div class="level-conn" id="conn2"></div>
+      <div id="lvl3" class="level-step"><span class="level-icon">○</span> L3 MEDIA</div>
+    </div>
+
+    <!-- Current BCI + FSM Status -->
+    <section class="status-grid">
+      <div class="card current-cmd">
+        <div class="card-head">CURRENT BCI COMMAND <span class="card-sub" id="latestLatency">Latency: --</span></div>
+        <div id="latestCommand" class="bci-huge">Waiting...</div>
+        <div><span id="latestConfidence" class="conf-badge">-- CONFIDENCE</span></div>
+        <div class="meta-grid">
+          <div class="meta-box"><div class="meta-label">Level</div><div id="latestLevel" class="meta-value">--</div></div>
+          <div class="meta-box"><div class="meta-label">Target Device</div><div id="latestTarget" class="meta-value">--</div></div>
+          <div class="meta-box"><div class="meta-label">Triggered Action</div><div id="latestAction" class="meta-value small">--</div></div>
+          <div class="meta-box"><div class="meta-label">FSM State</div><div id="latestState" class="meta-value small">--</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">FSM / SYSTEM STATUS</div>
+        <div id="currentState" class="fsm-huge">SUB_MASTER_DASHBOARD</div>
+        <div id="currentStateLabel" class="meta-value small" style="color:#64748b;margin-bottom:14px">SUB_MASTER_DASHBOARD (Level 2)</div>
+        <div class="meta-grid">
+          <div class="meta-box"><div class="meta-label">Target Device</div><div id="currentTarget" class="meta-value">none</div></div>
+          <div class="meta-box"><div class="meta-label">Level</div><div id="currentLevel" class="meta-value">2</div></div>
+          <div class="meta-box" style="grid-column:1/-1"><div class="meta-label">Last Action</div><div id="currentAction" class="meta-value small">--</div></div>
+          <div class="meta-box" style="grid-column:1/-1"><div class="meta-label">JioSaavn Status</div><div id="jiosaavnStatus" class="meta-value small" style="display:flex;align-items:center;gap:8px"><span id="jiosaavnDot" style="width:8px;height:8px;border-radius:50%;background:#475569;display:inline-block"></span><span id="jiosaavnText">Idle</span></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Volume + Command Window Tuning (Issue 1 & 3) -->
+    <section class="tuning-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px">
+      <div class="card" id="volumeCard">
+        <div class="card-head">VOLUME <span class="card-sub" id="volumeSource">System Master Volume</span></div>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+          <span style="font-size:28px">🔊</span>
+          <span id="volumePct" style="font-family:Orbitron,sans-serif;font-weight:800;font-size:28px;color:var(--text-bright)">--%</span>
+          <span id="volumeDetail" style="font-size:12px;color:#64748b;margin-left:auto">--</span>
+        </div>
+        <div class="volume-bar-container">
+          <div id="volumeBarFill" class="volume-bar-fill" style="width: 50%"></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px;align-items:center">
+          <button id="volDownBtn" class="fsm-btn" title="Set -10%">🔉 -10%</button>
+          <button id="volUpBtn" class="fsm-btn" title="Set +10%">🔊 +10%</button>
+          <input id="volumeSlider" type="range" min="0" max="100" value="50" style="flex:1;accent-color:var(--cyan)" />
+        </div>
+        <div style="font-size:11px;color:#475569;margin-top:8px">Uses desktop system master volume via <code>get_system_master_volume()</code> (polled 1s). Mobile volume via MQTT <code>media_update</code> if available; desktop is source of truth. <span id="volumeNote"></span></div>
+      </div>
+      <div class="card" id="windowCard">
+        <div class="card-head">COMMAND WINDOW <span class="card-sub">4s grouping for ordered doubles</span></div>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+          <button id="winMinus" class="fsm-btn" style="min-width:42px">−</button>
+          <div style="flex:1;text-align:center">
+            <div id="windowValue" style="font-family:Orbitron,sans-serif;font-weight:800;font-size:26px;color:var(--cyan)">4.0s</div>
+            <div style="font-size:11px;color:#64748b">Duration</div>
+          </div>
+          <button id="winPlus" class="fsm-btn" style="min-width:42px">+</button>
+        </div>
+        <input id="windowSlider" type="range" min="0.5" max="10" step="0.5" value="4.0" style="width:100%;accent-color:var(--violet)" />
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#64748b;margin-top:4px"><span>0.5s</span><span>10s</span></div>
+        <div style="font-size:12px;color:#94a3b8;margin-top:10px">Current: <span id="windowCurrent" style="color:var(--text-bright)">4.0s</span> <span style="color:#475569">• Gen <span id="windowGen">0</span></span></div>
+        <div style="font-size:11px;color:#475569;margin-top:6px">New value applies to <b>next</b> window; active window finishes with original duration. Default 4.0s.</div>
+      </div>
+    </section>
+
+    <!-- Command Mapping & Test (interactive) -->
+    <section class="card" style="margin-top:18px">
+      <div class="card-head">COMMAND MAPPING <span class="card-sub">Click any command to simulate BCI input — POST /api/bci/command</span></div>
+
+      <div class="map-section">
+        <div class="map-section-title">LEVEL 1 — DOMAIN SELECTION</div>
+        <div class="map-grid-4" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+          <button class="map-item clickable" data-raw="RIGHT"><span class="map-cmd"><b>RIGHT</b> <span class="arrow">→</span> Enter Level 2</span><span class="map-hint">Click to simulate BCI command</span></button>
+        </div>
+      </div>
+
+      <div class="map-section">
+        <div class="map-section-title">LEVEL 2 — DASHBOARD SELECTION</div>
+        <div class="map-grid-4" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+          <button class="map-item clickable" data-raw="PUSH"><span class="map-cmd"><b>PUSH</b> <span class="arrow">→</span> Mobile Dashboard</span><span class="map-hint">Click to simulate</span></button>
+          <button class="map-item clickable" data-raw="PULL"><span class="map-cmd"><b>PULL</b> <span class="arrow">→</span> Desktop Dashboard</span><span class="map-hint">Click to simulate</span></button>
+        </div>
+      </div>
+
+      <div class="map-section">
+        <div class="map-section-title">LEVEL 3 — SINGLE COMMANDS</div>
+        <div class="map-grid-4">
+          <button class="map-item clickable" data-raw="LEFT"><span class="map-cmd"><b>LEFT</b> <span class="arrow">→</span> Play / Pause</span><span class="map-hint">Click to simulate</span></button>
+          <button class="map-item clickable" data-raw="PUSH"><span class="map-cmd"><b>PUSH</b> <span class="arrow">→</span> Next Track</span><span class="map-hint">Click to simulate</span></button>
+          <button class="map-item clickable" data-raw="PULL"><span class="map-cmd"><b>PULL</b> <span class="arrow">→</span> Previous Track</span><span class="map-hint">Click to simulate</span></button>
+          <button class="map-item clickable" data-raw="RIGHT" id="cmdSearchBtn"><span class="map-cmd"><b>RIGHT</b> <span class="arrow">→</span> Search</span><span class="map-hint">Click to type song</span></button>
+        </div>
+
+        <!-- Dynamic Search Input: Revealed when RIGHT -> Search command is clicked (Sprint 12 feature) -->
+        <div id="searchCommandPanel" style="display: none; margin-top: 12px; padding: 14px 18px; border-radius: 12px; background: rgba(13, 20, 38, 0.95); border: 1px solid rgba(0, 246, 255, 0.4); box-shadow: 0 4px 20px rgba(0, 246, 255, 0.15);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <span style="font-size: 12px; font-weight: 600; color: var(--cyan); letter-spacing: 0.5px; text-transform: uppercase;">🎵 Search &amp; Play Song on JioSaavn</span>
+            <button id="closeSearchPanelBtn" type="button" title="Close search" style="background: none; border: none; color: #94a3b8; font-size: 16px; cursor: pointer; line-height: 1; padding: 2px 6px;">✕</button>
+          </div>
+          <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <input id="searchInput" type="text" placeholder="Type song name (e.g. Believer, Arijit Singh, Imagine Dragons)..." autocomplete="off" style="flex: 1; min-width: 220px; padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(0, 246, 255, 0.3); background: rgba(10, 15, 30, 0.9); color: #ffffff; font-size: 14px; outline: none;" />
+            <button id="searchBtn" class="fsm-btn" type="button" style="background: linear-gradient(135deg, #0284c7, #00f6ff); color: #0f172a; font-weight: 700; padding: 10px 18px; border-radius: 8px; border: none; cursor: pointer; white-space: nowrap;">▶ Search &amp; Play</button>
+          </div>
+          <div id="searchStatus" style="margin-top: 8px; font-size: 12px; color: #94a3b8; min-height: 18px;"></div>
+        </div>
+      </div>
+
+      <div class="map-section">
+        <div class="map-section-title">LEVEL 3 — ORDERED DOUBLE COMMANDS (order matters)</div>
+        <div class="map-grid-4">
+          <button class="map-item clickable ordered" data-raw-double="RIGHT+PUSH"><span class="map-cmd"><span><b>RIGHT</b> <span class="arrow">→</span> <b>PUSH</b></span> <span class="arrow">→</span> Volume Up</span><span class="map-hint">Click to simulate sequence</span></button>
+          <button class="map-item clickable ordered" data-raw-double="RIGHT+PULL"><span class="map-cmd"><span><b>RIGHT</b> <span class="arrow">→</span> <b>PULL</b></span> <span class="arrow">→</span> Volume Down</span><span class="map-hint">Click to simulate sequence</span></button>
+          <button class="map-item clickable ordered" data-raw-double="PUSH+RIGHT"><span class="map-cmd"><span><b>PUSH</b> <span class="arrow">→</span> <b>RIGHT</b></span> <span class="arrow">→</span> Back to Level 2</span><span class="map-hint">Click to simulate sequence</span></button>
+          <button class="map-item clickable ordered" data-raw-double="PUSH+LEFT"><span class="map-cmd"><span><b>PUSH</b> <span class="arrow">→</span> <b>LEFT</b></span> <span class="arrow">→</span> Back to Level 1</span><span class="map-hint">Click to simulate sequence</span></button>
+        </div>
+        <div class="map-note">RIGHT → PUSH ≠ PUSH → RIGHT — order is preserved through the 4s command window.</div>
+      </div>
+
+      <div class="fsm-buttons" style="margin-top:6px">
+        <button id="fsmReset" class="fsm-btn fsm-reset">↺ Reset FSM</button>
+        <button id="fsmNeutral" class="fsm-btn" style="opacity:0.65">NEUTRAL (ignored)</button>
+      </div>
+      <div id="fsmLog" class="fsm-log"></div>
+    </section>
+
+    <!-- BCI Data Replay (additive, minimal) -->
+    <section class="card" style="margin-top:18px" id="bciReplayPanel">
+      <div class="card-head">BCI DATA REPLAY <span class="card-sub">Replay raw BCI sessions through the same Cortex path (receive_cortex_command)</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:end">
+        <div style="flex:1 1 220px;min-width:180px">
+          <label for="replayFile" style="font-size:11px;letter-spacing:0.08em;color:#64748b;display:block;margin-bottom:6px">DATASET</label>
+          <select id="replayFile" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:rgba(13,20,38,0.8);color:var(--text-bright);font-family:inherit">
+            <option value="">-- loading --</option>
+          </select>
+        </div>
+        <div style="flex:0 0 100px">
+          <label for="replaySpeed" style="font-size:11px;letter-spacing:0.08em;color:#64748b;display:block;margin-bottom:6px">SPEED</label>
+          <input id="replaySpeed" type="number" step="0.1" min="0.1" max="10" value="1.0" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:rgba(13,20,38,0.8);color:var(--text-bright)"/>
+        </div>
+        <div style="flex:0 0 140px">
+          <label for="replayMode" style="font-size:11px;letter-spacing:0.08em;color:#64748b;display:block;margin-bottom:6px">MODE</label>
+          <select id="replayMode" style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:rgba(13,20,38,0.8);color:var(--text-bright);font-family:inherit">
+            <option value="realtime">Real-time</option>
+            <option value="fast">Fast</option>
+          </select>
+        </div>
+        <button id="replayBtn" class="fsm-btn" style="background:rgba(0,246,255,0.12);border-color:rgba(0,246,255,0.4);color:var(--cyan);padding:10px 18px">▶ Replay</button>
+        <button id="replayStopBtn" class="fsm-btn" style="padding:10px 18px">⏹ Stop</button>
+        <button id="recToggleBtn" class="fsm-btn" style="padding:10px 18px;opacity:0.9" title="Optional recording of live BCI to raw file">● Recording: OFF</button>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+        <span style="font-size:12px;letter-spacing:0.06em;color:#64748b">Replay Status:</span>
+        <span id="replayStatus" style="font-size:13px;color:var(--text-bright);display:flex;align-items:center;gap:8px"><span id="replayDot" style="width:8px;height:8px;border-radius:50%;background:#475569;display:inline-block"></span><span id="replayText">Idle</span></span>
+        <span id="replayProgress" style="font-size:12px;color:#64748b"></span>
+        <span id="recStatus" style="font-size:12px;color:#64748b;margin-left:auto"></span>
+      </div>
+      <div id="replayLog" style="margin-top:10px;font-size:11px;color:#7d8db1;max-height:100px;overflow-y:auto"></div>
+    </section>
+
+    <!-- History + Log -->
+    <section class="bottom-grid">
+      <div class="card">
+        <div class="card-head">COMMAND HISTORY <span class="card-sub">accepted logical only · NEUTRAL hidden</span></div>
+        <div id="commandHistory" class="history-list"><div class="history-empty">No commands yet.</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head">SYSTEM EVENT LOG</div>
+        <div id="fsmLog2" class="history-list" style="max-height:340px;overflow-y:auto;font-size:12px;color:#7d8db1"></div>
+      </div>
+    </section>
+
+    <div class="hub-foot">
+      <span id="utcClock">--:--:-- UTC</span><span class="sep">·</span>
+      <span>route: /dashboard (unified)</span><span class="sep">·</span>
+      <span>FSM single source · 4s window · 0.35 threshold · 2s debounce</span>
+    </div>
+
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js" integrity="sha384-ZCmVL/dTQHh41JxtZe73klDRFSJ/zixGCGt5lhnLQGjSWfAnlXSg+GSnRACaK5lc" crossorigin="anonymous"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>

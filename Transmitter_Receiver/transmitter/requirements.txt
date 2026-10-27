@@ -1,0 +1,28 @@
+# JioSaavn Master Hub - unified dashboard server (mobile + desktop)
+# Core — all platforms
+Flask>=3.0.0
+Flask-SocketIO>=5.3.0
+paho-mqtt>=2.0.0
+selenium>=4.15.0
+requests>=2.31.0
+PyAutoGUI>=0.9.54
+websocket-client>=1.0.0
+pyserial>=3.5
+python-dotenv>=1.0.0
+# Windows-only (volume/media via PyCaw + WinRT)
+# Installed automatically on Windows; safe to ignore on macOS/Linux
+# Note: winrt/winsdk optional — media status still works without it (falls back)
+comtypes>=1.2.0; sys_platform == "win32"
+pycaw>=20230407; sys_platform == "win32"
+# winsdk provides winrt on newer Python/Windows; uncomment if needed:
+# winsdk>=1.0.0; sys_platform == "win32"
+
+# Cross-platform helpers (optional, improves process detection)
+psutil>=5.9.0
+
+# PostgreSQL driver
+pg8000>=1.30.0
+
+# Linux optional (recommended for better media/volume support)
+# Install manually on Linux: sudo apt install playerctl xdotool pulseaudio-utils
+# playerctl + pactl/amixer already on most distros; no pip package needed.

@@ -1,0 +1,86 @@
+# -*- mode: python ; coding: utf-8 -*-
+
+from PyInstaller.utils.hooks import collect_all
+
+# Collect selenium dependencies
+datas_sel, binaries_sel, hidden_sel = collect_all('selenium')
+
+a = Analysis(
+    ['app.py'],
+    pathex=[],
+    binaries=binaries_sel,
+    datas=[
+        ('mobile_dashboard/mobile_plugin/config/config.py', 'mobile_dashboard/mobile_plugin/config'),
+        ('mobile_dashboard/mobile_plugin/services/mqtt_service.py', 'mobile_dashboard/mobile_plugin/services'),
+        ('mobile_dashboard/mobile_plugin/services/__init__.py', 'mobile_dashboard/mobile_plugin/services'),
+        ('backend/command_router.py', 'backend'),
+        ('backend/payload_logger.py', 'backend'),
+        ('backend/__init__.py', 'backend'),
+        ('backend/uart_transmitter.py', 'backend'),
+        ('backend/boxed_logger.py', 'backend'),
+        ('desktop/desktop_controller.py', 'desktop'),
+        ('dashboard/templates/index.html', 'dashboard/templates'),
+        ('dashboard/static/style.css', 'dashboard/static'),
+        ('dashboard/static/app.js', 'dashboard/static'),
+        ('master_dashboard/templates/index.html', 'master_dashboard/templates'),
+        ('master_dashboard/static/style.css', 'master_dashboard/static'),
+        ('master_dashboard/static/app.js', 'master_dashboard/static'),
+    ] + datas_sel,
+    hiddenimports=[
+        'serial',
+        'serial.tools',
+        'serial.tools.list_ports',
+        'serial.tools.list_ports_windows',
+        'serial.win32',
+        'paho.mqtt.client',
+        'flask',
+        'flask_socketio',
+        'socketio',
+        'engineio',
+        'eventlet',
+        'pygetwindow',
+        'pyscreeze',
+        'pymsgbox',
+        'pytweening',
+        'mouseinfo',
+        'pyperclip',
+        'PIL',
+        'PIL.Image',
+        'psutil',
+        'ctypes',
+        'ctypes.wintypes',
+        'command_system.command_mapper',
+        'backend.command_router',
+        'backend.payload_logger',
+        'config.config',
+    ] + hidden_sel,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='Transmitter',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)

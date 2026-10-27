@@ -1,0 +1,23 @@
+{
+  "serial_port": "AUTO",
+  "baud_rate": 9600,
+  "timeout": 1,
+  "default_playlist": "Dumdaar Hits",
+  "default_playlist_url": "https://www.jiosaavn.com/featured/dumdaar-hits/8MT-LQlP35c_",
+  "actions": {
+    "NEXT": "media_next",
+    "PREVIOUS": "media_previous",
+    "PLAY_PAUSE": "media_play_pause",
+    "VOLUME_UP": "media_volume_up",
+    "VOLUME_DOWN": "media_volume_down"
+  },
+  "logging": {
+    "log_dir": "logs",
+    "log_file": "receiver.log",
+    "eval_file": "evaluation.jsonl",
+    "level": "INFO",
+    "max_bytes": 10485760,
+    "backup_count": 5,
+    "enable_eval_log": true
+  }
+}

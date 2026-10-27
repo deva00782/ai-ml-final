@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">Remote JioSaavn</string>
+    <string name="bci_remote_title">🧠 Remote JioSaavn</string>
+    <string name="status_listening">Status: ACTIVE &amp; LISTENING</string>
+    <string name="status_standby">Status: STANDBY</string>
+    <string name="status_need_permission">Status: NEED NOTIFICATION ACCESS</string>
+    <string name="python_status_online">Python Pipeline: ONLINE</string>
+    <string name="python_status_offline">Python Pipeline: OFFLINE</string>
+    <string name="python_status_connecting">Python Pipeline: CONNECTING...</string>
+    <string name="app_status_offline">App MQTT: OFFLINE (%s)</string>
+    <string name="btn_stop_remote">STOP BCI REMOTE</string>
+    <string name="btn_start_remote">START BCI REMOTE</string>
+    <string name="activity_logs_label">Activity Logs:</string>
+    <string name="system_initiating_log">[SYSTEM INITIATING]\nAwaiting BCI stream initialization...\n</string>
+    <string name="device_id_label">Device ID: %s</string>
+    <string name="btn_connect">CONNECT</string>
+    <string name="btn_disconnect">DISCONNECT</string>
+    <string name="status_connecting">Status: CONNECTING...</string>
+    <string name="status_online">Status: ONLINE</string>
+    <string name="status_disconnecting">Status: DISCONNECTING...</string>
+    <string name="status_offline">Status: OFFLINE</string>
+    <string name="enter_device_username">Device Username</string>
+    <string name="device_username_hint">Enter device username</string>
+    <string name="change_id">CHANGE</string>
+</resources>

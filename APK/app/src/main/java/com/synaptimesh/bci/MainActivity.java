@@ -1,0 +1,635 @@
+package com.synaptimesh.bci;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.content.Intent;
+import android.graphics.Color;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.ProgressBar;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.appcompat.app.AppCompatActivity;
+
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+
+@SuppressLint({"SetTextI18n", "SimpleDateFormat"})
+public class MainActivity extends AppCompatActivity {
+
+    public static final String PREFS_NAME = "BciPrefs";
+    public static final String KEY_USERNAME = "bci_username";
+    public static final String DEFAULT_USERNAME = "";
+    public static final String KEY_DEVICE_TYPE = "bci_device_type";
+    public static final String DEFAULT_DEVICE_TYPE = "android";
+    public static final String KEY_DEVICE_ID = "bci_device_id";
+    public static final String KEY_USER_DISCONNECTED = "bci_user_disconnected";
+
+    public static MainActivity instance;
+
+    // Existing UI references
+    private TextView tvStatus;
+    private Button btnConnect;
+    private Button btnDisconnect;
+    private TextView tvConsoleLog;
+    private ScrollView consoleWrapper;
+    private TextView tvDeviceUsername;
+    private Button btnChangeUsername;
+
+    // Enhanced UI references
+    private TextView tvDeviceUuid;
+    private TextView tvNowPlayingTitle;
+    private TextView tvNowPlayingArtist;
+    private TextView tvPlaybackStatus;
+    private ProgressBar pbTrackProgress;
+    private TextView tvTrackTimeline;
+    private TextView tvVolumeLevel;
+    private Button btnOpenJioSaavn;
+    private EditText etSearchQuery;
+    private Button btnSearchAndPlay;
+    private TextView tvPermissionsSummary;
+    private Button btnPermissionNotification;
+    private Button btnPermissionAccessibility;
+    private Button btnClearLogs;
+    private Button btnToggleConsole;
+    private boolean isConsoleExpanded = false;
+
+    // Periodic telemetry refresh while active
+    private final Handler uiRefreshHandler = new Handler(Looper.getMainLooper());
+    private final Runnable uiRefreshRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (BciMediaService.instance != null) {
+                BciMediaService.instance.refreshMediaTelemetry();
+            }
+            uiRefreshHandler.postDelayed(this, 1000);
+        }
+    };
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        instance = this;
+
+        // Bind existing views
+        tvStatus = findViewById(R.id.tvStatus);
+        btnConnect = findViewById(R.id.btnConnect);
+        btnDisconnect = findViewById(R.id.btnDisconnect);
+        tvConsoleLog = findViewById(R.id.tvConsoleLog);
+        consoleWrapper = findViewById(R.id.consoleWrapper);
+        tvDeviceUsername = findViewById(R.id.tvDeviceUsername);
+        btnChangeUsername = findViewById(R.id.btnChangeUsername);
+
+        // Bind enhanced views
+        tvDeviceUuid = findViewById(R.id.tvDeviceUuid);
+        tvNowPlayingTitle = findViewById(R.id.tvNowPlayingTitle);
+        tvNowPlayingArtist = findViewById(R.id.tvNowPlayingArtist);
+        tvPlaybackStatus = findViewById(R.id.tvPlaybackStatus);
+        pbTrackProgress = findViewById(R.id.pbTrackProgress);
+        tvTrackTimeline = findViewById(R.id.tvTrackTimeline);
+        tvVolumeLevel = findViewById(R.id.tvVolumeLevel);
+        btnOpenJioSaavn = findViewById(R.id.btnOpenJioSaavn);
+        etSearchQuery = findViewById(R.id.etSearchQuery);
+        btnSearchAndPlay = findViewById(R.id.btnSearchAndPlay);
+        tvPermissionsSummary = findViewById(R.id.tvPermissionsSummary);
+        btnPermissionNotification = findViewById(R.id.btnPermissionNotification);
+        btnPermissionAccessibility = findViewById(R.id.btnPermissionAccessibility);
+        btnClearLogs = findViewById(R.id.btnClearLogs);
+        btnToggleConsole = findViewById(R.id.btnToggleConsole);
+
+        // Ensure persistent unique hardware UUID exists and display it
+        String deviceId = getSavedDeviceId();
+        if (tvDeviceUuid != null) {
+            tvDeviceUuid.setText("UUID: " + deviceId);
+        }
+
+        String currentUsername = getSavedUsername();
+        String currentDeviceType = getSavedDeviceType();
+        updateUsernameDisplay(currentUsername, currentDeviceType);
+
+        android.content.SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        if (!prefs.contains(KEY_USERNAME) || currentUsername.isEmpty()) {
+            promptUsernameDialog(true);
+        }
+
+        btnChangeUsername.setOnClickListener(v -> promptUsernameDialog(false));
+
+        // Initial button states
+        btnConnect.setEnabled(true);
+        btnDisconnect.setEnabled(false);
+
+        btnConnect.setOnClickListener(v -> {
+            if (!isNotificationServiceEnabled()) {
+                appendLog("SYSTEM WARNING: Notification Listener permission not granted.");
+                Intent intent = new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS");
+                startActivity(intent);
+                return;
+            }
+            if (!isAccessibilityServiceEnabled()) {
+                appendLog("SYSTEM WARNING: Accessibility Service not enabled.");
+                Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+                startActivity(intent);
+                return;
+            }
+
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(KEY_USER_DISCONNECTED, false).apply();
+            updateStatusConnecting();
+            appendLog("SYSTEM ACTION: Connecting to server...");
+
+            if (BciMediaService.instance != null) {
+                BciMediaService.instance.connectMqtt();
+            } else {
+                appendLog("SYSTEM WARNING: BciMediaService is initializing...");
+            }
+        });
+
+        btnDisconnect.setOnClickListener(v -> {
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(KEY_USER_DISCONNECTED, true).apply();
+            updateStatusDisconnecting();
+            appendLog("SYSTEM ACTION: Disconnecting from server...");
+
+            if (BciMediaService.instance != null) {
+                BciMediaService.instance.disconnectMqtt();
+            } else {
+                updateStatusOffline("Service stopped");
+            }
+        });
+
+        // Open JioSaavn shortcut button
+        if (btnOpenJioSaavn != null) {
+            btnOpenJioSaavn.setOnClickListener(v -> openJioSaavn());
+        }
+
+        if (btnSearchAndPlay != null) {
+            btnSearchAndPlay.setOnClickListener(v -> {
+                String query = etSearchQuery == null ? "" : etSearchQuery.getText().toString();
+                if (BciMediaService.instance != null) {
+                    BciMediaService.instance.searchAndPlaySong(query);
+                } else {
+                    appendLog("SEARCH WARNING: Media service is not ready.");
+                }
+            });
+        }
+
+        // Direct permission click listeners
+        if (btnPermissionNotification != null) {
+            btnPermissionNotification.setOnClickListener(v -> {
+                Intent intent = new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS");
+                startActivity(intent);
+            });
+        }
+
+        if (btnPermissionAccessibility != null) {
+            btnPermissionAccessibility.setOnClickListener(v -> {
+                Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+                startActivity(intent);
+            });
+        }
+
+        // Clear console logs
+        if (btnClearLogs != null) {
+            btnClearLogs.setOnClickListener(v -> {
+                if (tvConsoleLog != null) {
+                    tvConsoleLog.setText("");
+                }
+            });
+        }
+
+        // Toggle / Expand console height
+        if (btnToggleConsole != null && consoleWrapper != null) {
+            btnToggleConsole.setOnClickListener(v -> {
+                isConsoleExpanded = !isConsoleExpanded;
+                ViewGroup.LayoutParams params = consoleWrapper.getLayoutParams();
+                float density = getResources().getDisplayMetrics().density;
+                params.height = isConsoleExpanded ? (int) (440 * density) : (int) (220 * density);
+                consoleWrapper.setLayoutParams(params);
+                btnToggleConsole.setText(isConsoleExpanded ? "COLLAPSE" : "EXPAND");
+            });
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        boolean notificationEnabled = isNotificationServiceEnabled();
+        boolean accessibilityEnabled = isAccessibilityServiceEnabled();
+
+        updatePermissionsUI(notificationEnabled, accessibilityEnabled);
+
+        if (notificationEnabled && accessibilityEnabled) {
+            boolean userDisconnected = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_USER_DISCONNECTED, false);
+
+            if (BciMediaService.instance != null) {
+                if (BciMediaService.instance.isMqttConnected()) {
+                    updateStatusOnline();
+                } else if (!userDisconnected) {
+                    updateStatusConnecting();
+                    BciMediaService.instance.connectMqtt();
+                } else {
+                    updateStatusOffline("Disconnected");
+                }
+                BciMediaService.instance.refreshMediaTelemetry();
+            } else {
+                updateStatusOffline(null);
+            }
+        } else if (!notificationEnabled) {
+            if (tvStatus != null) {
+                tvStatus.setText("●  STANDBY (Grant Notification Access)");
+                tvStatus.setTextColor(Color.parseColor("#FCCA73"));
+            }
+        } else {
+            if (tvStatus != null) {
+                tvStatus.setText("●  STANDBY (Enable Accessibility)");
+                tvStatus.setTextColor(Color.parseColor("#FCCA73"));
+            }
+        }
+
+        uiRefreshHandler.removeCallbacks(uiRefreshRunnable);
+        uiRefreshHandler.post(uiRefreshRunnable);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        uiRefreshHandler.removeCallbacks(uiRefreshRunnable);
+    }
+
+    private void updatePermissionsUI(boolean notificationEnabled, boolean accessibilityEnabled) {
+        if (btnPermissionNotification != null) {
+            if (notificationEnabled) {
+                btnPermissionNotification.setText("✓  Notification Access Enabled");
+                btnPermissionNotification.setTextColor(Color.parseColor("#60E8BB"));
+            } else {
+                btnPermissionNotification.setText("Grant Notification Access");
+                btnPermissionNotification.setTextColor(Color.parseColor("#FCCA73"));
+            }
+        }
+        if (btnPermissionAccessibility != null) {
+            if (accessibilityEnabled) {
+                btnPermissionAccessibility.setText("✓  Accessibility Service Enabled");
+                btnPermissionAccessibility.setTextColor(Color.parseColor("#60E8BB"));
+            } else {
+                btnPermissionAccessibility.setText("Enable Accessibility");
+                btnPermissionAccessibility.setTextColor(Color.parseColor("#FCCA73"));
+            }
+        }
+        if (tvPermissionsSummary != null) {
+            if (notificationEnabled && accessibilityEnabled) {
+                tvPermissionsSummary.setText("All required phone permissions are active and verified.");
+                tvPermissionsSummary.setTextColor(Color.parseColor("#60E8BB"));
+            } else {
+                tvPermissionsSummary.setText("Media access enables playback telemetry. Accessibility enables search and touch gestures.");
+                tvPermissionsSummary.setTextColor(Color.parseColor("#94A3B8"));
+            }
+        }
+    }
+
+    public void updateMediaDisplay(final String title, final String artist, final String status, final String currentTime, final String totalTime, final int progressPercent, final int volumePercent) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (tvNowPlayingTitle != null) {
+                tvNowPlayingTitle.setText((title != null && !title.trim().isEmpty()) ? title : "Ready when you are");
+            }
+            if (tvNowPlayingArtist != null) {
+                tvNowPlayingArtist.setText((artist != null && !artist.trim().isEmpty()) ? artist : "Open JioSaavn and play a track");
+            }
+            if (tvPlaybackStatus != null) {
+                if (status != null && status.equalsIgnoreCase("Playing")) {
+                    tvPlaybackStatus.setText("●  Playing");
+                    tvPlaybackStatus.setTextColor(Color.parseColor("#60E8BB"));
+                } else if (status != null && status.equalsIgnoreCase("Paused")) {
+                    tvPlaybackStatus.setText("●  Paused");
+                    tvPlaybackStatus.setTextColor(Color.parseColor("#FCCA73"));
+                } else {
+                    tvPlaybackStatus.setText("No active session");
+                    tvPlaybackStatus.setTextColor(Color.parseColor("#9EAFC3"));
+                }
+            }
+            if (pbTrackProgress != null) {
+                pbTrackProgress.setProgress(Math.max(0, Math.min(100, progressPercent)));
+            }
+            if (tvTrackTimeline != null) {
+                String cur = (currentTime != null && !currentTime.isEmpty()) ? currentTime : "--:--";
+                String tot = (totalTime != null && !totalTime.isEmpty()) ? totalTime : "--:--";
+                tvTrackTimeline.setText(cur + " / " + tot);
+            }
+            if (tvVolumeLevel != null) {
+                tvVolumeLevel.setText("Vol: " + volumePercent + "%");
+            }
+        });
+    }
+
+    public void openJioSaavn() {
+        if (BciMediaService.instance != null) {
+            BciMediaService.instance.launchJioSaavn();
+            return;
+        }
+        String[] packages = {"com.jio.media.jiobeats", "com.jio.media.jiosaavn"};
+        for (String pkg : packages) {
+            Intent intent = getPackageManager().getLaunchIntentForPackage(pkg);
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(intent);
+                return;
+            }
+        }
+        Toast.makeText(this, "JioSaavn is not installed", Toast.LENGTH_SHORT).show();
+    }
+
+    private boolean isAccessibilityServiceEnabled() {
+        if (BciAccessibilityService.instance != null) {
+            return true;
+        }
+        int accessibilityEnabled = 0;
+        try {
+            accessibilityEnabled = Settings.Secure.getInt(
+                getContentResolver(),
+                Settings.Secure.ACCESSIBILITY_ENABLED);
+        } catch (Settings.SettingNotFoundException e) {
+            // ignored
+        }
+        if (accessibilityEnabled == 1) {
+            String settingValue = Settings.Secure.getString(
+                getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            if (settingValue != null) {
+                return settingValue.contains("BciAccessibilityService");
+            }
+        }
+        return false;
+    }
+
+    public void updateStatusConnecting() {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (tvStatus != null) {
+                tvStatus.setText("●  CONNECTING...");
+                tvStatus.setTextColor(Color.parseColor("#FBBF24")); // Amber/Yellow
+            }
+            if (btnConnect != null) btnConnect.setEnabled(false);
+            if (btnDisconnect != null) btnDisconnect.setEnabled(true);
+        });
+    }
+
+    public void updateStatusOnline() {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (tvStatus != null) {
+                tvStatus.setText("●  ONLINE");
+                tvStatus.setTextColor(Color.parseColor("#60E8BB")); // Mint Green
+            }
+            if (btnConnect != null) btnConnect.setEnabled(false);
+            if (btnDisconnect != null) btnDisconnect.setEnabled(true);
+            appendLog("STATUS: Connected. ONLINE & LISTENING.");
+        });
+    }
+
+    public void updateStatusDisconnecting() {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (tvStatus != null) {
+                tvStatus.setText("●  DISCONNECTING...");
+                tvStatus.setTextColor(Color.parseColor("#FBBF24")); // Amber/Yellow
+            }
+            if (btnConnect != null) btnConnect.setEnabled(false);
+            if (btnDisconnect != null) btnDisconnect.setEnabled(false);
+        });
+    }
+
+    public void updateStatusOffline(String reason) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (tvStatus != null) {
+                tvStatus.setText("●  STANDBY" + (reason != null && !reason.isEmpty() ? " (" + reason + ")" : ""));
+                tvStatus.setTextColor(Color.parseColor("#94A3B8"));
+            }
+            if (btnConnect != null) btnConnect.setEnabled(true);
+            if (btnDisconnect != null) btnDisconnect.setEnabled(false);
+            if (reason != null && !reason.isEmpty()) {
+                appendLog("STATUS: OFFLINE (" + reason + ")");
+            }
+        });
+    }
+
+    public void updatePythonStatus(final boolean online) {
+        if (online) {
+            updateStatusOnline();
+        } else {
+            updateStatusOffline("Server offline");
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        uiRefreshHandler.removeCallbacks(uiRefreshRunnable);
+        if (instance == this) {
+            instance = null;
+        }
+    }
+
+    public void processIncomingBciPacket(final String command, final String query) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+
+            String formattedCmd = command.toLowerCase();
+            boolean isSearch = false;
+            String searchStr = "";
+
+            String matchCmd = command.toUpperCase().trim();
+            if (matchCmd.contains("NEXTTRACK") || matchCmd.contains("NEXT_SONG")) {
+                formattedCmd = "nexttrack";
+            } else if (matchCmd.contains("PLAY/PAUSE") || matchCmd.contains("PLAY_PAUSE")) {
+                formattedCmd = "play/pause";
+            } else if (matchCmd.contains("VOLUMEUP") || matchCmd.contains("VOLUME_UP")) {
+                formattedCmd = "volumeup";
+            } else if (matchCmd.contains("VOLUMEDOWN") || matchCmd.contains("VOLUME_DOWN")) {
+                formattedCmd = "volumedown";
+            } else if (matchCmd.contains("SEARCH_ALBUM") || matchCmd.contains("PLAYLIST") || matchCmd.contains("SEARCH_PLAYLIST") || matchCmd.contains("TYPE_QUERY") || matchCmd.contains("SEARCH")) {
+                searchStr = (query != null && !query.trim().isEmpty()) ? query.trim() : "Inaam";
+                formattedCmd = "Search: " + searchStr;
+                isSearch = true;
+            } else if (matchCmd.contains("JIOSAAVN")) {
+                formattedCmd = "open jiosaavn";
+            } else if (matchCmd.contains("RETURN_TO_HOME") || matchCmd.equals("DROP")) {
+                formattedCmd = "return to home";
+            }
+
+            appendLog("MQTT RECEIVED: " + formattedCmd);
+            if (isSearch) {
+                appendLog("Executed Search for: " + searchStr);
+            }
+        });
+    }
+
+    public void appendLog(final String logLine) {
+        android.util.Log.d("MainActivity", logLine);
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (tvConsoleLog != null && consoleWrapper != null) {
+                String timeStamp = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+                CharSequence current = tvConsoleLog.getText();
+                if (current != null && current.length() > 50000) {
+                    tvConsoleLog.setText(current.subSequence(current.length() - 25000, current.length()));
+                }
+                tvConsoleLog.append("[" + timeStamp + "] " + logLine + "\n");
+                consoleWrapper.post(() -> {
+                    if (!isFinishing() && !isDestroyed()) {
+                        consoleWrapper.fullScroll(View.FOCUS_DOWN);
+                    }
+                });
+            }
+        });
+    }
+
+    public void onUsernameConflict(final String username, final String message) {
+        runOnUiThread(() -> {
+            if (tvStatus != null) {
+                tvStatus.setText("●  NAME CONFLICT");
+                tvStatus.setTextColor(Color.parseColor("#EF4444")); // Red
+            }
+            appendLog("REGISTRATION REJECTED: Username '" + username + "' is already registered by another device.");
+
+            if (!isFinishing() && !isDestroyed()) {
+                new androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("Username Already Registered")
+                    .setMessage((message != null && !message.isEmpty()) ? message :
+                        "The username '" + username + "' is already in use by another device.\nPlease choose a unique username so commands can reach your device.")
+                    .setIcon(android.R.drawable.ic_dialog_alert)
+                    .setCancelable(false)
+                    .setPositiveButton("Change Username", (dialog, which) -> {
+                        promptUsernameDialog(false);
+                    })
+                    .setNegativeButton("Disconnect", (dialog, which) -> {
+                        updateStatusOffline("Name conflict");
+                        if (BciMediaService.instance != null) {
+                            BciMediaService.instance.disconnectMqtt();
+                        }
+                    })
+                    .show();
+            }
+        });
+    }
+
+    public void onUsernameApproved(final String username) {
+        runOnUiThread(() -> {
+            if (tvStatus != null) {
+                tvStatus.setText("●  ONLINE");
+                tvStatus.setTextColor(Color.parseColor("#60E8BB")); // Mint Green
+            }
+            appendLog("REGISTRATION APPROVED: Device verified as '" + username + "'.");
+            Toast.makeText(this, "Device verified as '" + username + "'", Toast.LENGTH_SHORT).show();
+        });
+    }
+
+    public String getSavedDeviceId() {
+        android.content.SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        String deviceId = prefs.getString(KEY_DEVICE_ID, null);
+        if (deviceId == null || deviceId.trim().isEmpty()) {
+            deviceId = java.util.UUID.randomUUID().toString();
+            prefs.edit().putString(KEY_DEVICE_ID, deviceId).apply();
+        }
+        return deviceId;
+    }
+
+    public String getSavedUsername() {
+        android.content.SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        String username = prefs.getString(KEY_USERNAME, DEFAULT_USERNAME);
+        return username != null ? username.trim() : "";
+    }
+
+    public String getSavedDeviceType() {
+        return DEFAULT_DEVICE_TYPE;
+    }
+
+    private void updateUsernameDisplay(String username, String deviceType) {
+        if (tvDeviceUsername != null) {
+            String displayUser = (username != null && !username.trim().isEmpty()) ? username : "Not Set";
+            tvDeviceUsername.setText("Device ID: " + displayUser + " [ANDROID]");
+        }
+    }
+
+    public void promptUsernameDialog(boolean isInitial) {
+        androidx.appcompat.app.AlertDialog.Builder builder = new androidx.appcompat.app.AlertDialog.Builder(this);
+        builder.setTitle(getString(R.string.enter_device_username));
+
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        layout.setPadding(50, 20, 50, 20);
+
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+        input.setHint(getString(R.string.device_username_hint));
+        String saved = getSavedUsername();
+        if (saved != null && !saved.trim().isEmpty()) {
+            input.setText(saved);
+            input.setSelection(input.getText().length());
+        } else {
+            input.setText("");
+        }
+        layout.addView(input);
+
+        builder.setView(layout);
+
+        builder.setPositiveButton("Save", (dialog, which) -> {
+            String raw = input.getText().toString().trim().toLowerCase();
+            String cleaned = raw.replaceAll("[^a-z0-9_]", "_");
+            if (cleaned.isEmpty()) {
+                Toast.makeText(this, "Please enter a valid device username", Toast.LENGTH_SHORT).show();
+                if (isInitial) {
+                    promptUsernameDialog(true);
+                }
+                return;
+            }
+            String selectedType = DEFAULT_DEVICE_TYPE;
+            String deviceId = getSavedDeviceId();
+
+            android.content.SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            prefs.edit()
+                .putString(KEY_USERNAME, cleaned)
+                .putString(KEY_DEVICE_TYPE, selectedType)
+                .putString(KEY_DEVICE_ID, deviceId)
+                .putBoolean(KEY_USER_DISCONNECTED, false)
+                .apply();
+
+            updateUsernameDisplay(cleaned, selectedType);
+            if (tvDeviceUuid != null) {
+                tvDeviceUuid.setText("UUID: " + deviceId);
+            }
+            appendLog("DEVICE ID: Set to '" + cleaned + "' [ANDROID] UUID=" + deviceId.substring(0, Math.min(8, deviceId.length())) + "...");
+
+            if (BciMediaService.instance != null) {
+                BciMediaService.instance.updateDeviceUsername(cleaned, selectedType, deviceId);
+            }
+        });
+
+        if (!isInitial) {
+            builder.setNegativeButton("Cancel", (dialog, which) -> dialog.cancel());
+        }
+
+        builder.setCancelable(!isInitial);
+        builder.show();
+    }
+
+    private boolean isNotificationServiceEnabled() {
+        String flat = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+        if (flat != null && !flat.isEmpty()) {
+            return flat.contains("BciMediaService");
+        }
+        return false;
+    }
+}

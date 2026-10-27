@@ -1,0 +1,6 @@
+# iOS Gateway secrets
+ios_gateway/AuthKey_*.p8
+ios_gateway/apns_device.json
+ios_gateway/__pycache__/
+ios_gateway/venv/
+*.p8
