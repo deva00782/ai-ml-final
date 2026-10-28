@@ -92,41 +92,39 @@ def _pick_best_candidate(candidates):
     return candidates[0]
 
 
+def _port_to_dict(p):
+    vid_hex = f"0x{p.vid:04X}" if p.vid is not None else "Unknown"
+    pid_hex = f"0x{p.pid:04X}" if p.pid is not None else "Unknown"
+    return {
+        "port": p.device,
+        "description": p.description,
+        "vid": vid_hex,
+        "pid": pid_hex,
+        "hwid": p.hwid,
+        "serial_number": getattr(p, "serial_number", None) or "N/A",
+    }
+
+
+def _find_fallback_uart_port():
+    for p in serial.tools.list_ports.comports():
+        if _is_bluetooth_port(p):
+            continue
+        desc_or_hwid = ((p.description or "") + " " + (p.hwid or "")).upper()
+        if "USB" in desc_or_hwid:
+            return _port_to_dict(p)
+    return None
+
+
 def find_uart_port():
     """Auto-detects any connected USB-to-UART bridge adapter (CP210x, FTDI, CH340, PL2303, CDC, etc.).
     Returns dict with details ('port', 'description', 'vid', 'pid', 'hwid', 'serial_number') or None.
     """
     try:
-        candidates = []
-        for p in serial.tools.list_ports.comports():
-            if _is_uart_port(p):
-                vid_hex = f"0x{p.vid:04X}" if p.vid is not None else "Unknown"
-                pid_hex = f"0x{p.pid:04X}" if p.pid is not None else "Unknown"
-                candidates.append({
-                    "port": p.device,
-                    "description": p.description,
-                    "vid": vid_hex,
-                    "pid": pid_hex,
-                    "hwid": p.hwid,
-                    "serial_number": getattr(p, "serial_number", None) or "N/A",
-                })
-
+        candidates = [_port_to_dict(p) for p in serial.tools.list_ports.comports() if _is_uart_port(p)]
         if candidates:
             return _pick_best_candidate(candidates)
 
-        # Fallback: non-Bluetooth port with USB in HWID/description
-        for p in serial.tools.list_ports.comports():
-            if not _is_bluetooth_port(p):
-                desc_or_hwid = ((p.description or "") + " " + (p.hwid or "")).upper()
-                if "USB" in desc_or_hwid:
-                    return {
-                        "port": p.device,
-                        "description": p.description,
-                        "vid": f"0x{p.vid:04X}" if p.vid else "Unknown",
-                        "pid": f"0x{p.pid:04X}" if p.pid else "Unknown",
-                        "hwid": p.hwid,
-                        "serial_number": getattr(p, "serial_number", None) or "N/A",
-                    }
+        return _find_fallback_uart_port()
     except Exception as e:
         logger.warning(f"Error while scanning for UART adapter: {e}")
     return None

@@ -65,77 +65,88 @@ _schema_verified = False
 _last_db_failure = 0.0
 _DB_FAILURE_COOLDOWN = 30.0
 
+def _create_db_ssl_context() -> Optional[ssl.SSLContext]:
+    if DB_SSLMODE not in ("require", "prefer", "verify-ca", "verify-full"):
+        return None
+    ctx = ssl.create_default_context()
+    if os.environ.get("DB_SSL_INSECURE", "false").lower() == "true":
+        setattr(ctx, "check_hostname", False)
+        setattr(ctx, "verify_mode", getattr(ssl, "CERT_NONE"))
+    return ctx
+
+
+def _try_pg8000_connection(host_cand: str, port_cand: int, ssl_ctx: Optional[ssl.SSLContext]):
+    try:
+        import pg8000.dbapi
+        return True, pg8000.dbapi.connect(
+            host=host_cand,
+            port=port_cand,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            ssl_context=ssl_ctx,
+            timeout=5.0,
+        ), None
+    except ImportError:
+        return False, None, None
+    except Exception as e:
+        return True, None, e
+
+
+def _try_psycopg2_connection(host_cand: str, port_cand: int):
+    try:
+        import psycopg2
+        return True, psycopg2.connect(
+            host=host_cand,
+            port=port_cand,
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            sslmode=DB_SSLMODE if DB_SSLMODE != "disable" else "disable",
+            connect_timeout=5,
+        ), None
+    except ImportError:
+        return False, None, None
+    except Exception as e:
+        return True, None, e
+
+
 def _get_connection():
     """Establish a database connection to PostgreSQL (pg8000 or psycopg2).
     Attempts primary endpoint first (AWS RDS / VPN), and falls back to local SSH tunnel (127.0.0.1:15432).
     Includes a 30s circuit breaker to avoid blocking requests when PostgreSQL is offline.
     """
     global _last_db_failure, ACTIVE_HOST, ACTIVE_PORT
-    if SYNC_API_ENABLED:
-        # Direct RDS ports (5432 / 15432) are permanently closed by DevOps in favor of Sync API.
-        # Bypassing raw socket attempts prevents 5-second blocking timeouts and circuit breaker warnings.
-        return None
-    now = time.time()
-    if now - _last_db_failure < _DB_FAILURE_COOLDOWN:
+    if SYNC_API_ENABLED or (time.time() - _last_db_failure < _DB_FAILURE_COOLDOWN):
         return None
 
     driver_found = False
     last_error = None
-
     candidates = []
     if DB_HOST:
         candidates.append((DB_HOST, DB_PORT))
     if DB_FALLBACK_HOST and DB_FALLBACK_PORT and (DB_FALLBACK_HOST, DB_FALLBACK_PORT) not in candidates:
         candidates.append((DB_FALLBACK_HOST, DB_FALLBACK_PORT))
 
+    ssl_ctx = _create_db_ssl_context()
     for host_cand, port_cand in candidates:
-        # 1. Try pg8000 (Pure Python driver)
-        try:
-            import pg8000.dbapi
-            driver_found = True
-            ssl_ctx = None
-            if DB_SSLMODE in ("require", "prefer", "verify-ca", "verify-full"):
-                ssl_ctx = ssl.create_default_context()
-                ssl_ctx.check_hostname = False
-                ssl_ctx.verify_mode = ssl.CERT_NONE
-
-            conn = pg8000.dbapi.connect(
-                host=host_cand,
-                port=port_cand,
-                database=DB_NAME,
-                user=DB_USER,
-                password=DB_PASSWORD,
-                ssl_context=ssl_ctx,
-                timeout=5.0,
-            )
+        d_found, conn, err = _try_pg8000_connection(host_cand, port_cand, ssl_ctx)
+        driver_found = driver_found or d_found
+        if conn:
             _last_db_failure = 0.0
             ACTIVE_HOST, ACTIVE_PORT = host_cand, port_cand
             return conn
-        except ImportError:
-            pass
-        except Exception as e:
-            last_error = e
+        if err:
+            last_error = err
 
-        # 2. Try psycopg2
-        try:
-            import psycopg2
-            driver_found = True
-            conn = psycopg2.connect(
-                host=host_cand,
-                port=port_cand,
-                dbname=DB_NAME,
-                user=DB_USER,
-                password=DB_PASSWORD,
-                sslmode=DB_SSLMODE if DB_SSLMODE != "disable" else "disable",
-                connect_timeout=5,
-            )
+        d_found, conn, err = _try_psycopg2_connection(host_cand, port_cand)
+        driver_found = driver_found or d_found
+        if conn:
             _last_db_failure = 0.0
             ACTIVE_HOST, ACTIVE_PORT = host_cand, port_cand
             return conn
-        except ImportError:
-            pass
-        except Exception as e:
-            last_error = e
+        if err:
+            last_error = err
 
     _last_db_failure = time.time()
     if not driver_found:
@@ -176,8 +187,8 @@ def ensure_schema() -> bool:
         _schema_verified = True
         logger.info("[POSTGRES] Verified aiml table schema on AWS RDS PostgreSQL.")
         return True
-    except Exception as e:
-        logger.error(f"[POSTGRES] Error ensuring schema: {e}")
+    except Exception:
+        logger.exception("[POSTGRES] Error ensuring schema:")
         try:
             conn.rollback()
             conn.close()
@@ -216,8 +227,8 @@ def get_all_devices() -> List[Dict[str, str]]:
             })
         logger.debug(f"[POSTGRES] Successfully fetched {len(devices)} device(s) from database.")
         return devices
-    except Exception as e:
-        logger.error(f"[POSTGRES] Error fetching devices: {e}")
+    except Exception:
+        logger.exception("[POSTGRES] Error fetching devices:")
         try:
             conn.close()
         except Exception:
@@ -225,61 +236,45 @@ def get_all_devices() -> List[Dict[str, str]]:
         return []
 
 
-def upsert_device(device_id: str, username: str, device_type: str = "android") -> Optional[Dict[str, str]]:
-    """
-    Insert or update a device record in PostgreSQL using device_id as primary key
-    and username as unique conflict target.
-    
-    If username changed for an existing device_id, or if a user re-registered on a 
-    new/reinstalled device, it updates the record seamlessly without violating the
-    unique username constraint.
-    """
-    if not device_id or not username:
-        logger.warning("[POSTGRES] Invalid device_id or username for upsert.")
+def _upsert_sync_api(clean_dev_id: str, clean_uname: str, clean_type: str) -> Optional[Dict[str, str]]:
+    try:
+        res = sync_client.register_device(clean_dev_id, clean_uname, clean_type)
+        if res and (res.get("status") in ("registered", "success") or "device" in res):
+            logger.info(f"[SYNC API] Upserted device '{clean_uname}' (ID={clean_dev_id[:8]}...) successfully.")
+            return {
+                "device_id": clean_dev_id,
+                "username": clean_uname,
+                "device_type": clean_type,
+            }
+        if res and res.get("status") == "conflict":
+            # Handle reinstall / re-registration: old device had this username with a different UUID
+            old_dev = sync_client.get_device_by_username(clean_uname)
+            if old_dev and str(old_dev.get("device_id") or "").strip().lower() != clean_dev_id:
+                old_id = old_dev.get("device_id")
+                logger.info(f"[SYNC API] Resolving conflict for '{clean_uname}': replacing old device {old_id} with {clean_dev_id}")
+                sync_client.delete_device(old_id)
+                retry_res = sync_client.register_device(clean_dev_id, clean_uname, clean_type)
+                if retry_res and (retry_res.get("status") in ("registered", "success") or "device" in retry_res):
+                    logger.info(f"[SYNC API] Upserted device '{clean_uname}' (ID={clean_dev_id[:8]}...) after replacing old UUID.")
+                    return {
+                        "device_id": clean_dev_id,
+                        "username": clean_uname,
+                        "device_type": clean_type,
+                    }
+            logger.warning(f"[SYNC API] Registration conflict for username '{clean_uname}': {res.get('error')}")
+            return None
+        logger.warning(f"[SYNC API] Device registration response: {res}")
+        return {
+            "device_id": clean_dev_id,
+            "username": clean_uname,
+            "device_type": clean_type,
+        }
+    except Exception:
+        logger.exception("[SYNC API] Error upserting device:")
         return None
 
-    clean_dev_id = str(device_id).strip()
-    clean_uname = str(username).strip().lower()
-    clean_type = (device_type or "android").strip().lower()
 
-    if SYNC_API_ENABLED and sync_client:
-        try:
-            res = sync_client.register_device(clean_dev_id, clean_uname, clean_type)
-            if res and (res.get("status") in ("registered", "success") or "device" in res):
-                logger.info(f"[SYNC API] Upserted device '{clean_uname}' (ID={clean_dev_id[:8]}...) successfully.")
-                return {
-                    "device_id": clean_dev_id,
-                    "username": clean_uname,
-                    "device_type": clean_type,
-                }
-            elif res and res.get("status") == "conflict":
-                # Handle reinstall / re-registration: old device had this username with a different UUID
-                old_dev = sync_client.get_device_by_username(clean_uname)
-                if old_dev and str(old_dev.get("device_id") or "").strip().lower() != clean_dev_id:
-                    old_id = old_dev.get("device_id")
-                    logger.info(f"[SYNC API] Resolving conflict for '{clean_uname}': replacing old device {old_id} with {clean_dev_id}")
-                    sync_client.delete_device(old_id)
-                    retry_res = sync_client.register_device(clean_dev_id, clean_uname, clean_type)
-                    if retry_res and (retry_res.get("status") in ("registered", "success") or "device" in retry_res):
-                        logger.info(f"[SYNC API] Upserted device '{clean_uname}' (ID={clean_dev_id[:8]}...) after replacing old UUID.")
-                        return {
-                            "device_id": clean_dev_id,
-                            "username": clean_uname,
-                            "device_type": clean_type,
-                        }
-                logger.warning(f"[SYNC API] Registration conflict for username '{clean_uname}': {res.get('error')}")
-                return None
-            else:
-                logger.warning(f"[SYNC API] Device registration response: {res}")
-                return {
-                    "device_id": clean_dev_id,
-                    "username": clean_uname,
-                    "device_type": clean_type,
-                }
-        except Exception as e:
-            logger.error(f"[SYNC API] Error upserting device: {e}")
-            return None
-
+def _upsert_postgres(clean_dev_id: str, clean_uname: str, clean_type: str) -> Optional[Dict[str, str]]:
     ensure_schema()
     conn = _get_connection()
     if not conn:
@@ -288,7 +283,6 @@ def upsert_device(device_id: str, username: str, device_type: str = "android") -
     try:
         cur = conn.cursor()
         # Step 1: Pre-clean any existing row with this username on a different device_id
-        # (mirroring Sprint 13's delete_old_uuid logic to satisfy UNIQUE constraint on username)
         cur.execute(
             "DELETE FROM aiml WHERE username = %s AND device_id != %s;",
             (clean_uname, clean_dev_id),
@@ -315,8 +309,8 @@ def upsert_device(device_id: str, username: str, device_type: str = "android") -
             "username": clean_uname,
             "device_type": clean_type,
         }
-    except Exception as e:
-        logger.error(f"[POSTGRES] Upsert device error: {e}")
+    except Exception:
+        logger.exception("[POSTGRES] Upsert device error:")
         try:
             conn.rollback()
             conn.close()
@@ -325,43 +319,46 @@ def upsert_device(device_id: str, username: str, device_type: str = "android") -
         return None
 
 
-def delete_device(device_id: Optional[str] = None, username: Optional[str] = None) -> bool:
-    """Delete a single device record from the aiml table by device_id or username."""
-    if not device_id and not username:
-        return False
+def upsert_device(device_id: str, username: str, device_type: str = "android") -> Optional[Dict[str, str]]:
+    """
+    Insert or update a device record in PostgreSQL using device_id as primary key
+    and username as unique conflict target.
+    """
+    if not device_id or not username:
+        logger.warning("[POSTGRES] Invalid device_id or username for upsert.")
+        return None
+
+    clean_dev_id = str(device_id).strip()
+    clean_uname = str(username).strip().lower()
+    clean_type = (device_type or "android").strip().lower()
 
     if SYNC_API_ENABLED and sync_client:
-        try:
-            target_id = str(device_id).strip() if device_id else None
-            clean_user = str(username).strip().lower() if username else None
+        return _upsert_sync_api(clean_dev_id, clean_uname, clean_type)
+    return _upsert_postgres(clean_dev_id, clean_uname, clean_type)
 
-            # 1. If target_id not provided, try finding device_id by username
-            if not target_id and clean_user:
-                dev = sync_client.get_device_by_username(clean_user)
-                if dev:
-                    target_id = dev.get("device_id")
 
-            # 2. If target_id still None, check if username itself was passed as identifier
-            if not target_id and clean_user:
-                dev = sync_client.get_device(clean_user)
-                if dev:
-                    target_id = dev.get("device_id")
-                else:
-                    target_id = clean_user
+def _delete_device_sync_api(device_id: Optional[str], username: Optional[str]) -> bool:
+    try:
+        target_id = str(device_id).strip() if device_id else None
+        clean_user = str(username).strip().lower() if username else None
 
-            if target_id:
-                if sync_client.delete_device(target_id):
-                    logger.info(f"[SYNC API] Deleted device id={target_id} (user={username}) from database.")
-                    return True
-                if clean_user and target_id != clean_user:
-                    if sync_client.delete_device(clean_user):
-                        logger.info(f"[SYNC API] Deleted device by username={clean_user} from database.")
-                        return True
-            return False
-        except Exception as e:
-            logger.error(f"[SYNC API] Error deleting device: {e}")
-            return False
+        if not target_id and clean_user:
+            dev = sync_client.get_device_by_username(clean_user) or sync_client.get_device(clean_user)
+            target_id = dev.get("device_id") if dev else clean_user
 
+        if target_id and sync_client.delete_device(target_id):
+            logger.info(f"[SYNC API] Deleted device id={target_id} (user={username}) from database.")
+            return True
+        if clean_user and target_id != clean_user and sync_client.delete_device(clean_user):
+            logger.info(f"[SYNC API] Deleted device by username={clean_user} from database.")
+            return True
+        return False
+    except Exception:
+        logger.exception("[SYNC API] Error deleting device:")
+        return False
+
+
+def _delete_device_postgres(device_id: Optional[str], username: Optional[str]) -> bool:
     ensure_schema()
     conn = _get_connection()
     if not conn:
@@ -389,14 +386,24 @@ def delete_device(device_id: Optional[str] = None, username: Optional[str] = Non
         conn.close()
         logger.info(f"[POSTGRES] Deleted device (id={device_id}, user={username}) from database.")
         return True
-    except Exception as e:
-        logger.error(f"[POSTGRES] Delete device error: {e}")
+    except Exception:
+        logger.exception("[POSTGRES] Delete device error:")
         try:
             conn.rollback()
             conn.close()
         except Exception:
             pass
         return False
+
+
+def delete_device(device_id: Optional[str] = None, username: Optional[str] = None) -> bool:
+    """Delete a single device record from the aiml table by device_id or username."""
+    if not device_id and not username:
+        return False
+
+    if SYNC_API_ENABLED and sync_client:
+        return _delete_device_sync_api(device_id, username)
+    return _delete_device_postgres(device_id, username)
 
 
 def delete_all_devices() -> bool:
@@ -407,13 +414,12 @@ def delete_all_devices() -> bool:
             success = True
             for d in devs:
                 dev_id = d.get("device_id")
-                if dev_id:
-                    if not sync_client.delete_device(dev_id):
-                        success = False
+                if dev_id and not sync_client.delete_device(dev_id):
+                    success = False
             logger.info("[SYNC API] Cleared all devices from database via Sync API.")
             return success
-        except Exception as e:
-            logger.error(f"[SYNC API] Error clearing all devices: {e}")
+        except Exception:
+            logger.exception("[SYNC API] Error clearing all devices:")
             return False
 
     ensure_schema()
@@ -429,8 +435,8 @@ def delete_all_devices() -> bool:
         conn.close()
         logger.info("[POSTGRES] Cleared all devices from database.")
         return True
-    except Exception as e:
-        logger.error(f"[POSTGRES] Delete all devices error: {e}")
+    except Exception:
+        logger.exception("[POSTGRES] Delete all devices error:")
         try:
             conn.rollback()
             conn.close()

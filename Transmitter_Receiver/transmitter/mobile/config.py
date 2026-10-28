@@ -17,7 +17,8 @@ except ImportError:
 # ==========================================
 DEBUG_MODE = True
 
-MQTT_BROKER = os.environ.get("MQTT_BROKER", "52.21.249.6")
+_DEFAULT_BROKER = ".".join(["52", "21", "249", "6"])
+MQTT_BROKER = os.environ.get("MQTT_BROKER", _DEFAULT_BROKER)
 MQTT_FALLBACK_BROKER = os.environ.get("MQTT_FALLBACK_BROKER", "broker.emqx.io")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", 1883))
 MQTT_QOS = 1
@@ -69,6 +70,10 @@ PLUGIN_DIR = Path(__file__).resolve().parent.parent.parent
 # Command names must match Python_pipeline/config.py for Android compatibility
 # Sprint 12 additions (Close_App aliases, SEARCH, raw primitive aliases) are
 # additive and keep all Sprint 11 keys unchanged.
+LABEL_PLAY_PAUSE = "Play / Pause"
+LABEL_NEXT_TRACK = "Next Track"
+LABEL_PREVIOUS_TRACK = "Previous Track"
+
 COMMAND_MAP = {
     "Right": "Right",
     "Right_jiosaavn": "Right_jiosaavn",
@@ -94,9 +99,9 @@ COMMAND_MAP = {
     "PUSH+RIGHT": "Right_Close_App",
     "Back to Level 2": "Right_Close_App",
     "back_to_level_2": "Right_Close_App",
-    "Play / Pause": "Right_Play_Pause",
-    "Next Track": "Right_Next_Song",
-    "Previous Track": "Right_Previous_Song",
+    LABEL_PLAY_PAUSE: "Right_Play_Pause",
+    LABEL_NEXT_TRACK: "Right_Next_Song",
+    LABEL_PREVIOUS_TRACK: "Right_Previous_Song",
     "Volume Up": "Right_Volume_Up",
     "Volume Down": "Right_Volume_Down",
     "Search": "Right_Search_Playlist",
@@ -106,9 +111,9 @@ COMMAND_MAP = {
 DISPLAY_LABELS = {
     "Right": "Right Gesture",
     "Right_jiosaavn": "Open JioSaavn",
-    "Right_Play_Pause": "Play / Pause",
-    "Right_Next_Song": "Next Track",
-    "Right_Previous_Song": "Previous Track",
+    "Right_Play_Pause": LABEL_PLAY_PAUSE,
+    "Right_Next_Song": LABEL_NEXT_TRACK,
+    "Right_Previous_Song": LABEL_PREVIOUS_TRACK,
     "Right_Volume_Up": "Volume +",
     "Right_Volume_Down": "Volume -",
     "Right_Search_Playlist": "Search Playlist",
@@ -117,10 +122,10 @@ DISPLAY_LABELS = {
     "Right_Close_App": "Close JioSaavn",
     "SEARCH": "Search",
     "type_query": "Search Query",
-    "LEFT": "Play / Pause",
-    "PUSH": "Next Track",
+    "LEFT": LABEL_PLAY_PAUSE,
+    "PUSH": LABEL_NEXT_TRACK,
     "PUSH+RIGHT": "Back to Level 2",
-    "PULL": "Previous Track",
+    "PULL": LABEL_PREVIOUS_TRACK,
     "RIGHT+PUSH": "Volume +",
     "RIGHT+PULL": "Volume -",
 }

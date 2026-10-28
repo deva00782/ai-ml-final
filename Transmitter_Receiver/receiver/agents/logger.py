@@ -136,6 +136,32 @@ def validate_response(
     return validation_str, is_match
 
 
+def _format_single_field_row(
+    k: Any, v: Any, max_k_len: int, inner_width: int, empty_line: str
+) -> List[str]:
+    if k == "" and (v is None or v == ""):
+        return [empty_line]
+    val_str = "" if v is None else str(v)
+    key_str = f"{str(k):<{max_k_len}}"
+    prefix = f"{key_str} : "
+    prefix_len = len(prefix)
+    avail_val_width = inner_width - prefix_len
+
+    if len(val_str) <= avail_val_width:
+        content = f"{prefix}{val_str}"
+        return [f"│ {content:<{inner_width}} │"]
+
+    wrapped = textwrap.wrap(val_str, width=avail_val_width)
+    if not wrapped:
+        return [f"│ {prefix:<{inner_width}} │"]
+
+    res = [f"│ {prefix + wrapped[0]:<{inner_width}} │"]
+    indent = " " * prefix_len
+    for w in wrapped[1:]:
+        res.append(f"│ {indent + w:<{inner_width}} │")
+    return res
+
+
 def _render_field_rows(
     fields: Union[Dict[str, Any], List[Tuple[str, Any]]],
     inner_width: int,
@@ -151,29 +177,9 @@ def _render_field_rows(
     for item in field_list:
         if isinstance(item, str):
             rows.append(f"│ {item:<{inner_width}} │")
-            continue
-        k, v = item
-        if k == "" and (v is None or v == ""):
-            rows.append(empty_line)
-            continue
-        val_str = "" if v is None else str(v)
-        key_str = f"{str(k):<{max_k_len}}"
-        prefix = f"{key_str} : "
-        prefix_len = len(prefix)
-        avail_val_width = inner_width - prefix_len
-
-        if len(val_str) <= avail_val_width:
-            content = f"{prefix}{val_str}"
-            rows.append(f"│ {content:<{inner_width}} │")
         else:
-            wrapped = textwrap.wrap(val_str, width=avail_val_width)
-            if not wrapped:
-                rows.append(f"│ {prefix:<{inner_width}} │")
-            else:
-                rows.append(f"│ {prefix + wrapped[0]:<{inner_width}} │")
-                indent = " " * prefix_len
-                for w in wrapped[1:]:
-                    rows.append(f"│ {indent + w:<{inner_width}} │")
+            k, v = item
+            rows.extend(_format_single_field_row(k, v, max_k_len, inner_width, empty_line))
     return rows
 
 
@@ -262,25 +268,34 @@ def log_box(
     return box_str
 
 
-def _populate_box_log_entry(record: logging.LogRecord, log_entry: Dict[str, Any]) -> None:
-    """Extracts box title, event name, and box fields into the log entry."""
-    box_title = getattr(record, "box_title", "")
+def _derive_box_event_name(record: logging.LogRecord, box_title: str) -> str:
     event_name = getattr(record, "box_event", None)
     if not event_name:
         clean_title = box_title.replace("—", " ").replace("-", " ")
         words = [w for w in clean_title.split() if w.isalnum()]
-        event_name = "_".join(words).upper() if words else "BOX_EVENT"
+        return "_".join(words).upper() if words else "BOX_EVENT"
+    return event_name
 
-    log_entry["event"] = event_name
+
+def _extract_clean_box_fields(box_fields: Any, log_entry: Dict[str, Any]) -> None:
+    if not isinstance(box_fields, dict):
+        return
+    for k, v in box_fields.items():
+        if not k or str(k).startswith("__") or v is None or str(v).strip() == "":
+            continue
+        clean_k = str(k).lower().replace(" ", "_").replace("-", "_").replace(":", "").strip()
+        if clean_k and clean_k not in log_entry:
+            log_entry[clean_k] = v
+
+
+def _populate_box_log_entry(record: logging.LogRecord, log_entry: Dict[str, Any]) -> None:
+    """Extracts box title, event name, and box fields into the log entry."""
+    box_title = getattr(record, "box_title", "")
+    log_entry["event"] = _derive_box_event_name(record, box_title)
     log_entry["message"] = box_title or "Box Event"
 
     box_fields = getattr(record, "box_fields", {})
-    if isinstance(box_fields, dict):
-        for k, v in box_fields.items():
-            if k and not str(k).startswith("__"):
-                clean_k = str(k).lower().replace(" ", "_").replace("-", "_").replace(":", "").strip()
-                if clean_k and clean_k not in log_entry and v is not None and str(v).strip() != "":
-                    log_entry[clean_k] = v
+    _extract_clean_box_fields(box_fields, log_entry)
 
 
 def _populate_extra_context(record: logging.LogRecord, log_entry: Dict[str, Any]) -> None:

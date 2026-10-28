@@ -163,7 +163,24 @@ class CommandHandler:
         return cmd.lower(), None
 
     @staticmethod
-    def _parse_fallback(cleaned: str):
+    def _match_volume_fallback(cleaned_upper: str):
+        if ("VOL" in cleaned_upper and "UP" in cleaned_upper) or cleaned_upper in ("VOLUME+", "VOL+"):
+            return "volume_up", None
+        if ("VOL" in cleaned_upper and "DOWN" in cleaned_upper) or cleaned_upper in ("VOLUME-", "VOL-"):
+            return "volume_down", None
+        return None
+
+    @staticmethod
+    def _match_search_fallback(cleaned: str, cleaned_upper: str):
+        for entity_keyword in ("SEARCH", "PLAYLIST", "ARTIST", "SINGER", "ACTOR", "ALBUM", "SONG"):
+            if entity_keyword in cleaned_upper:
+                parts = cleaned.split("|", 1)
+                query = parts[1].strip() if len(parts) > 1 else ""
+                return "search", query
+        return None
+
+    @classmethod
+    def _parse_fallback(cls, cleaned: str):
         cleaned_upper = cleaned.upper()
         if "PING" in cleaned_upper:
             return "PING", None
@@ -173,20 +190,17 @@ class CommandHandler:
             return "previous_track", None
         if "PLAY" in cleaned_upper or "PAUSE" in cleaned_upper:
             return "play_pause", None
-        if "VOL" in cleaned_upper and "UP" in cleaned_upper or cleaned_upper in ("VOLUME+", "VOL+"):
-            return "volume_up", None
-        if "VOL" in cleaned_upper and "DOWN" in cleaned_upper or cleaned_upper in ("VOLUME-", "VOL-"):
-            return "volume_down", None
+
+        vol_res = cls._match_volume_fallback(cleaned_upper)
+        if vol_res:
+            return vol_res
+
         if "OPEN" in cleaned_upper:
             return "open_desktop_dashboard", None
-        if "BACK_TO_LEVEL_2" in cleaned_upper or "PUSH+RIGHT" in cleaned_upper or "RIGHT_CLOSE_APP" in cleaned_upper or "BACK TO LEVEL 2" in cleaned_upper:
+        if any(k in cleaned_upper for k in ("BACK_TO_LEVEL_2", "PUSH+RIGHT", "RIGHT_CLOSE_APP", "BACK TO LEVEL 2")):
             return "back_to_level_2", None
-        for entity_keyword in ("SEARCH", "PLAYLIST", "ARTIST", "SINGER", "ACTOR", "ALBUM", "SONG"):
-            if entity_keyword in cleaned_upper:
-                parts = cleaned.split("|", 1)
-                query = parts[1].strip() if len(parts) > 1 else ""
-                return "search", query
-        return None
+
+        return cls._match_search_fallback(cleaned, cleaned_upper)
 
     @classmethod
     def parse(cls, raw_data):

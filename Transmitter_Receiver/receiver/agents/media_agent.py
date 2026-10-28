@@ -805,6 +805,17 @@ def _ensure_dom_driver(url: Optional[str] = None):
     return _get_dom_driver()
 
 
+def _find_jiosaavn_handle(driver) -> bool:
+    for handle in reversed(driver.window_handles):
+        try:
+            driver.switch_to.window(handle)
+            if JIOSAAVN_DOMAIN in (driver.current_url or "").lower():
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _switch_to_jiosaavn(driver) -> bool:
     """Focus the driver on the JioSaavn tab, if any."""
     try:
@@ -815,13 +826,8 @@ def _switch_to_jiosaavn(driver) -> bool:
 
     try:
         # Check window handles in reverse order so the newest opened tab is favored
-        for handle in reversed(driver.window_handles):
-            try:
-                driver.switch_to.window(handle)
-                if JIOSAAVN_DOMAIN in (driver.current_url or "").lower():
-                    return True
-            except Exception:
-                continue
+        if _find_jiosaavn_handle(driver):
+            return True
 
         # If user opened a new blank tab (e.g. chrome://newtab or about:blank)
         if driver.window_handles:
@@ -1708,28 +1714,12 @@ def _ui_search_and_play(query: str) -> bool:
 
     return _fallback_search_submit(driver, inp)
 
-    # Dismiss search focus / dropdown
-    try:
-        driver.execute_script("var inp = document.querySelector('input.rbt-input-main, input[aria-label=\"Search\"]'); if (inp) inp.blur();")
-    except Exception:
-        pass
 
-    _on_song_page = True
-    is_resting_state = False
-    logger.info(f"[SEARCH UI] Search for '{clean_query}' completed (Playback active={confirmed}).")
-    return confirmed
-
-
-def _close_jiosaavn_tab() -> None:
-    """Close JioSaavn desktop / Google Chrome window completely on back to level 2."""
-    global _autoplay_unlocked, _DOM_DRIVER, _on_song_page, is_resting_state, _CHROME_PROC
-    
-    port = _find_active_debug_port()
-    
-    # 1. Gracefully close driver handles
+def _close_dom_driver_handles() -> None:
+    global _DOM_DRIVER
     if _DOM_DRIVER is not None:
         try:
-            for handle in list(_DOM_DRIVER.window_handles):
+            for handle in _DOM_DRIVER.window_handles:
                 try:
                     _DOM_DRIVER.switch_to.window(handle)
                     _DOM_DRIVER.close()
@@ -1742,20 +1732,41 @@ def _close_jiosaavn_tab() -> None:
         finally:
             _DOM_DRIVER = None
 
-    # 2. Terminate tracked subprocess directly
-    if _CHROME_PROC is not None:
-        try:
-            _CHROME_PROC.terminate()
-            _CHROME_PROC.kill()
-        except Exception:
-            pass
-        _CHROME_PROC = None
 
-    # 3. Terminate any remaining process bound to the automation debug port
+def _close_win32_chrome_windows() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        chrome_classes = ("Chrome_WidgetWin_1", "Chrome_WidgetWin_0", "ApplicationFrameWindow")
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def _enum_close(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True if hwnd else False
+            title_len = user32.GetWindowTextLengthW(hwnd) + 1
+            title_buf = ctypes.create_unicode_buffer(title_len)
+            user32.GetWindowTextW(hwnd, title_buf, title_len)
+            class_buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, class_buf, 256)
+            t = title_buf.value.lower()
+            c = class_buf.value
+            if (c in chrome_classes or "chrome" in c.lower()):
+                if ("jiosaavn" in t or "saavn" in t or "about:blank" in t or not t.strip()):
+                    user32.PostMessageW(hwnd, 0x0010, 0, 0)
+            return True if hwnd else False
+
+        user32.EnumWindows(_enum_close, 0)
+    except Exception as e:
+        logger.debug(f"[BROWSER] Win32 window close notice: {e}")
+
+
+def _kill_automation_windows_processes(port: Optional[int]) -> None:
     if port:
         _kill_process_on_port(port)
 
-    # 4. Force kill any automation Chrome/Edge processes by command line (prevents black screen / empty frame)
     if os.name == "nt":
         try:
             cmd = (
@@ -1769,33 +1780,29 @@ def _close_jiosaavn_tab() -> None:
         except Exception as e:
             logger.debug(f"[BROWSER] PowerShell cleanup notice: {e}")
 
-    # 5. Win32 fallback: close any remaining JioSaavn or Google Chrome browser window
-    if os.name == "nt":
+    _close_win32_chrome_windows()
+
+
+def _close_jiosaavn_tab() -> None:
+    """Close JioSaavn desktop / Google Chrome window completely on back to level 2."""
+    global _autoplay_unlocked, _DOM_DRIVER, _on_song_page, is_resting_state, _CHROME_PROC
+
+    port = _find_active_debug_port()
+
+    # 1. Gracefully close driver handles
+    _close_dom_driver_handles()
+
+    # 2. Terminate tracked subprocess directly
+    if _CHROME_PROC is not None:
         try:
-            import ctypes
-            from ctypes import wintypes
-            user32 = ctypes.windll.user32
-            chrome_classes = ("Chrome_WidgetWin_1", "Chrome_WidgetWin_0", "ApplicationFrameWindow")
+            _CHROME_PROC.terminate()
+            _CHROME_PROC.kill()
+        except Exception:
+            pass
+        _CHROME_PROC = None
 
-            @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-            def _enum_close(hwnd, _lparam):
-                if not user32.IsWindowVisible(hwnd):
-                    return True
-                title_len = user32.GetWindowTextLengthW(hwnd) + 1
-                title_buf = ctypes.create_unicode_buffer(title_len)
-                user32.GetWindowTextW(hwnd, title_buf, title_len)
-                class_buf = ctypes.create_unicode_buffer(256)
-                user32.GetClassNameW(hwnd, class_buf, 256)
-                t = title_buf.value.lower()
-                c = class_buf.value
-                if (c in chrome_classes or "chrome" in c.lower()):
-                    if ("jiosaavn" in t or "saavn" in t or "about:blank" in t or not t.strip()):
-                        user32.PostMessageW(hwnd, 0x0010, 0, 0)
-                return True
-
-            user32.EnumWindows(_enum_close, 0)
-        except Exception as e:
-            logger.debug(f"[BROWSER] Win32 window close notice: {e}")
+    # 3. Kill automation port and window processes
+    _kill_automation_windows_processes(port)
 
     # Reset state cleanly
     _autoplay_unlocked = False
@@ -2238,6 +2245,52 @@ def _try_fallback_playlists(driver) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _ensure_dashboard_ready(driver) -> None:
+    logger.debug("[INIT] Waiting for JioSaavn dashboard to load...")
+    dashboard_ok = _wait_for_dashboard(driver, timeout=25.0)
+    if not dashboard_ok:
+        curr_url = (driver.current_url or "").lower() if driver else ""
+        if "jiosaavn" in curr_url or "saavn" in curr_url or (driver and driver.title):
+            logger.info("[INIT] JioSaavn page is open and active in browser. Proceeding with playback.")
+        else:
+            logger.warning("[INIT] Dashboard wait timed out but browser is active. Navigating directly to JioSaavn homepage.")
+            try:
+                driver.get(DEFAULT_JIOSAAVN_URL)
+                time.sleep(2.0)
+            except Exception:
+                pass
+
+
+def _execute_initial_playback(driver, pl_result: Dict[str, Any]) -> Dict[str, Any]:
+    global _current_state
+    try:
+        _select_and_play_first_song(driver)
+        return pl_result
+    except JioSaavnInitError as e:
+        logger.warning(f"[INIT] Primary playlist failed ({e}), trying fallback playlists...")
+        _current_state = JioSaavnState.SELECT_PLAYLIST
+        fallback_result = _try_fallback_playlists(driver)
+        if fallback_result and fallback_result.get("success"):
+            return fallback_result
+        logger.warning("[INIT] Fallback playlists also reported issues, keeping JioSaavn open for user actions.")
+        return pl_result
+    except Exception as e:
+        err_msg = str(e)
+        if "invalid session id" in err_msg.lower() or "no such window" in err_msg.lower():
+            logger.warning(f"[INIT] Session issue ({e}), attempting driver re-attachment...")
+            global _DOM_DRIVER
+            _DOM_DRIVER = None
+            new_driver = _get_dom_driver()
+            if new_driver and _switch_to_jiosaavn(new_driver):
+                try:
+                    _select_and_play_first_song(new_driver)
+                except Exception as retry_err:
+                    logger.warning(f"[INIT] Retry start song playback notice: {retry_err}")
+        else:
+            logger.warning(f"[INIT] Start song playback notice: {e}")
+        return pl_result
+
+
 def initialize_jiosaavn_playback(playlist_name: Optional[str] = None, playlist_url: Optional[str] = None, command_id: Optional[str] = None) -> Dict[str, Any]:
     """Execute complete JioSaavn playback initialization sequence."""
     global _current_state, is_resting_state, _on_song_page
@@ -2262,22 +2315,7 @@ def initialize_jiosaavn_playback(playlist_name: Optional[str] = None, playlist_u
     _focus_browser_window()
 
     # 2. State: DASHBOARD_READY
-    logger.debug("[INIT] Waiting for JioSaavn dashboard to load...")
-    dashboard_ok = _wait_for_dashboard(driver, timeout=25.0)
-    if not dashboard_ok:
-        curr_url = (driver.current_url or "").lower() if driver else ""
-        if "jiosaavn" in curr_url or "saavn" in curr_url or (driver and driver.title):
-            logger.info("[INIT] JioSaavn page is open and active in browser. Proceeding with playback.")
-            dashboard_ok = True
-        else:
-            logger.warning("[INIT] Dashboard wait timed out but browser is active. Navigating directly to JioSaavn homepage.")
-            try:
-                driver.get(DEFAULT_JIOSAAVN_URL)
-                time.sleep(2.0)
-            except Exception:
-                pass
-            dashboard_ok = True
-
+    _ensure_dashboard_ready(driver)
     _current_state = JioSaavnState.DASHBOARD_READY
     logger.debug(f"[STATE] -> {_current_state}")
 
@@ -2285,35 +2323,11 @@ def initialize_jiosaavn_playback(playlist_name: Optional[str] = None, playlist_u
     _current_state = JioSaavnState.SELECT_PLAYLIST
     logger.debug(f"[STATE] -> {_current_state}")
     pl_result = _select_default_playlist(driver, target_playlist, target_url)
-    
+
     # 4. State: START_PLAYBACK
     _current_state = JioSaavnState.START_PLAYBACK
     logger.debug(f"[STATE] -> {_current_state}")
-    try:
-        _select_and_play_first_song(driver)
-    except JioSaavnInitError as e:
-        # Fallback: try random playlists if primary fails (empty playlist, no songs, etc.)
-        logger.warning(f"[INIT] Primary playlist failed ({e}), trying fallback playlists...")
-        _current_state = JioSaavnState.SELECT_PLAYLIST
-        fallback_result = _try_fallback_playlists(driver)
-        if fallback_result and fallback_result.get("success"):
-            pl_result = fallback_result
-        else:
-            logger.warning("[INIT] Fallback playlists also reported issues, keeping JioSaavn open for user actions.")
-    except Exception as e:
-        err_msg = str(e)
-        if "invalid session id" in err_msg.lower() or "no such window" in err_msg.lower():
-            logger.warning(f"[INIT] Session issue ({e}), attempting driver re-attachment...")
-            global _DOM_DRIVER
-            _DOM_DRIVER = None
-            driver = _get_dom_driver()
-            if driver and _switch_to_jiosaavn(driver):
-                try:
-                    _select_and_play_first_song(driver)
-                except Exception as retry_err:
-                    logger.warning(f"[INIT] Retry start song playback notice: {retry_err}")
-        else:
-            logger.warning(f"[INIT] Start song playback notice: {e}")
+    pl_result = _execute_initial_playback(driver, pl_result)
 
     # 5. State: VERIFY_PLAYBACK
     _current_state = JioSaavnState.VERIFY_PLAYBACK
@@ -2451,30 +2465,43 @@ def _check_jiosaavn_readiness(cmd: str) -> None:
 _LAST_PLAYBACK_DISPATCH = {"cmd": None, "ts": 0.0}
 
 
+def _canonicalize_playback_cmd(cmd: str) -> str:
+    if cmd in ("play_pause", "play", "pause", "media_play_pause"):
+        return "play_pause"
+    if cmd in ("next_track", "next", "media_next", "playnext", "play_next", "nextsong", "next_song"):
+        return "next_track"
+    if cmd in ("previous_track", "prev", "previous", "media_previous", "playprev", "play_prev"):
+        return "previous_track"
+    return cmd
+
+
+def _check_playback_debounce(canonical: str, now: float):
+    if canonical not in ("play_pause", "next_track", "previous_track"):
+        return None
+    last_cmd = _LAST_PLAYBACK_DISPATCH["cmd"]
+    last_ts = _LAST_PLAYBACK_DISPATCH["ts"]
+    if last_cmd == canonical and (now - last_ts) < 0.8:
+        logger.info(f"[DEBOUNCE] Ignoring rapid duplicate action '{canonical}' ({now - last_ts:.2f}s < 0.8s)")
+        return {
+            "command": canonical.upper(),
+            "action": canonical.upper(),
+            "status": "SUCCESS",
+            "state": _current_state,
+            "debounced": True,
+        }
+    _LAST_PLAYBACK_DISPATCH["cmd"] = canonical
+    _LAST_PLAYBACK_DISPATCH["ts"] = now
+    return None
+
+
 def _dispatch_playback_command(cmd: str, payload):
     now = time.time()
-    canonical = (
-        "play_pause" if cmd in ("play_pause", "play", "pause", "media_play_pause") else (
-            "next_track" if cmd in ("next_track", "next", "media_next", "playnext", "play_next", "nextsong", "next_song") else (
-                "previous_track" if cmd in ("previous_track", "prev", "previous", "media_previous", "playprev", "play_prev") else cmd
-            )
-        )
-    )
-    if canonical in ("play_pause", "next_track", "previous_track"):
-        if _LAST_PLAYBACK_DISPATCH["cmd"] == canonical and (now - _LAST_PLAYBACK_DISPATCH["ts"]) < 0.8:
-            logger.info(f"[DEBOUNCE] Ignoring rapid duplicate action '{canonical}' ({now - _LAST_PLAYBACK_DISPATCH['ts']:.2f}s < 0.8s)")
-            curr_state = "PLAYING" if _dom_is_playing() else "PAUSED"
-            return {
-                "command": canonical.upper(),
-                "action": canonical.upper(),
-                "status": "SUCCESS",
-                "state": _current_state,
-                "debounced": True,
-            }
-        _LAST_PLAYBACK_DISPATCH["cmd"] = canonical
-        _LAST_PLAYBACK_DISPATCH["ts"] = now
+    canonical = _canonicalize_playback_cmd(cmd)
+    debounce_res = _check_playback_debounce(canonical, now)
+    if debounce_res is not None:
+        return debounce_res
 
-    if cmd in ("play_pause", "play", "pause", "media_play_pause"):
+    if canonical == "play_pause":
         logger.debug("Action: Executing Play/Pause in JioSaavn...")
         prev_state = "PLAYING" if _dom_is_playing() else "PAUSED"
         _toggle_play_pause()
@@ -2489,13 +2516,13 @@ def _dispatch_playback_command(cmd: str, payload):
             "state": _current_state,
         }
 
-    if cmd in ("next_track", "next", "media_next", "playnext", "play_next", "nextsong", "next_song"):
+    if canonical == "next_track":
         logger.debug("Action: Executing Next Track in JioSaavn (with empty-queue fallback)...")
         res = handle_next_track()
         logger.debug(f"Action: Next Track completed: {res}")
         return res
 
-    if cmd in ("previous_track", "prev", "previous", "media_previous", "playprev", "play_prev"):
+    if canonical == "previous_track":
         logger.debug("Action: Executing Previous Track in JioSaavn (with empty-queue fallback)...")
         res = handle_previous_track()
         logger.debug(f"Action: Previous Track completed: {res}")

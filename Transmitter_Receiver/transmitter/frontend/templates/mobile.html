@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -578,16 +578,16 @@
       const ctx = canvas.getContext("2d");
       let step = 0;
 
-      function drawWaveSegment(context, startX, endX, yBase, freq1, freq2, stepOffset, strokeColor) {
-        context.beginPath();
-        context.strokeStyle = strokeColor;
-        context.lineWidth = 1;
+      function drawWaveSegment(startX, endX, yBase, freq1, freq2, stepOffset, strokeColor) {
+        ctx.beginPath();
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = 1;
         for (let x = startX; x < endX; x += 2) {
           const y = yBase + Math.sin((x + stepOffset) * freq1) * 8 + (freq2 ? Math.cos((x + step) * freq2) * 4 : 0);
-          if (x === startX) context.moveTo(x, y);
-          else context.lineTo(x, y);
+          if (x === startX) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
         }
-        context.stroke();
+        ctx.stroke();
       }
 
       function drawEEG() {
@@ -603,8 +603,8 @@
           const col1 = i % 2 === 0 ? "#00f6ff" : "#d946ef";
           const col2 = i % 2 === 0 ? "#d946ef" : "#00f6ff";
 
-          drawWaveSegment(ctx, 0, midX, yBase, 0.05, 0.02, step + i * 20, col1);
-          drawWaveSegment(ctx, midX, canvas.width, yBase, 0.04, 0, step + i * 15, col2);
+          drawWaveSegment(0, midX, yBase, 0.05, 0.02, step + i * 20, col1);
+          drawWaveSegment(midX, canvas.width, yBase, 0.04, 0, step + i * 15, col2);
         }
         step += 2;
         requestAnimationFrame(drawEEG);

@@ -7,13 +7,26 @@ from player_engine import PlayerEngine
 from bci_pipeline import BCIPipelineProcessor, CONFIDENCE_THRESHOLD, COMMAND_MAPPING, SONG_QUEUE
 from os_operations import get_system_master_volume, set_system_master_volume, get_media_status
 
+DEFAULT_SONG_TITLE = "Waiting for Track..."
+DEFAULT_SONG_ARTIST = "Unknown Artist"
+ACTION_LAUNCH_JIOSAAVN = "Launch JioSaavn"
+
+CLOSE_ACTIONS = {
+    "close app", "close_app", "right_close_app",
+    "back to level 2", "back_to_level_2",
+    "return to level 1", "return_to_level_1",
+    "return to level 2", "return_to_level_2",
+    "back to level 1", "back_to_level_1",
+    "back to main dashboard", "back_to_main_dashboard"
+}
+
 class JioSaavnController:
     MODULE_NAME = "JioSaavnController"
 
     def __init__(self):
         self.lock = threading.RLock()
-        self.current_song_title = "Waiting for Track..."
-        self.current_song_artist = "Unknown Artist"
+        self.current_song_title = DEFAULT_SONG_TITLE
+        self.current_song_artist = DEFAULT_SONG_ARTIST
         self.is_playing = False
         self.current_volume = float(get_system_master_volume())
         self._manual_song_idx = 0
@@ -83,8 +96,8 @@ class JioSaavnController:
                 media_status = await get_media_status()
 
                 with self.lock:
-                    self.current_song_title = media_status.get("title", "Waiting for Track...")
-                    self.current_song_artist = media_status.get("artist", "Unknown Artist")
+                    self.current_song_title = media_status.get("title", DEFAULT_SONG_TITLE)
+                    self.current_song_artist = media_status.get("artist", DEFAULT_SONG_ARTIST)
                     self.is_playing = media_status.get("is_playing", False)
                     self.current_volume = float(sys_vol)
             except Exception as e:
@@ -115,52 +128,62 @@ class JioSaavnController:
     def close_browser(self):
         with self.lock:
             self.is_playing = False
-            self.current_song_title = "Waiting for Track..."
-            self.current_song_artist = "Unknown Artist"
+            self.current_song_title = DEFAULT_SONG_TITLE
+            self.current_song_artist = DEFAULT_SONG_ARTIST
             return self.browser_manager.close_browser()
+
+    def _handle_automation_action(self, normalized_action, action):
+        if action == "Start Automation" or normalized_action == "Start Automation":
+            self.bci_processor.start_automation()
+            return {"action": "success", "message": "Automation Started", "automation_active": True}
+        if action == "Stop Automation" or normalized_action == "Stop Automation":
+            self.bci_processor.stop_automation()
+            return {"action": "success", "message": "Automation Stopped", "automation_active": False}
+        is_active = self.bci_processor.toggle_automation()
+        state_msg = "Started" if is_active else "Stopped"
+        return {"action": "success", "message": f"Automation {state_msg}", "automation_active": is_active}
+
+    def _handle_playback_action(self, normalized_action):
+        if normalized_action == "Play / Pause":
+            success = self.player_engine.play_pause()
+            return f"Executed Play / Pause ({'Success' if success else 'Failed'})"
+        if normalized_action == "Next Track":
+            success = self.player_engine.next_track()
+            return f"Executed Next Track ({'Success' if success else 'Failed'})"
+        if normalized_action == "Previous Track":
+            success = self.player_engine.previous_track()
+            return f"Executed Previous Track ({'Success' if success else 'Failed'})"
+        if normalized_action in ["Volume Up", "Volume Down"]:
+            success = self.player_engine.adjust_volume(normalized_action)
+            sys_vol = get_system_master_volume()
+            self.current_volume = float(sys_vol)
+            result = "Success" if success else "Failed"
+            logger.info(self.MODULE_NAME, f"Executed {normalized_action} -> Master Volume: {sys_vol}% ({result})")
+            return f"Executed {normalized_action} (Volume: {sys_vol}% - {result})"
+        return None
 
     def execute_action(self, action, query=None):
         with self.lock:
             normalized_action = COMMAND_MAPPING.get(action, action)
-            if normalized_action in ["Open JioSaavn", "Launch JioSaavn"]:
-                normalized_action = "Launch JioSaavn"
+            if normalized_action in ["Open JioSaavn", ACTION_LAUNCH_JIOSAAVN]:
+                normalized_action = ACTION_LAUNCH_JIOSAAVN
             elif normalized_action in ["Search", "SEARCH", "search"]:
                 normalized_action = "Search Album/Playlist"
 
             logger.info(self.MODULE_NAME, f"Received action execution request: '{action}' (Normalized: '{normalized_action}', Query: {query})")
-            
-            if normalized_action in ["Run BCI Automation", "Toggle Automation", "Start Automation"]:
-                if action == "Start Automation":
-                    self.bci_processor.start_automation()
-                    return {"action": "success", "message": "Automation Started", "automation_active": True}
-                elif action == "Stop Automation":
-                    self.bci_processor.stop_automation()
-                    return {"action": "success", "message": "Automation Stopped", "automation_active": False}
-                else:
-                    is_active = self.bci_processor.toggle_automation()
-                    state_msg = "Started" if is_active else "Stopped"
-                    return {"action": "success", "message": f"Automation {state_msg}", "automation_active": is_active}
 
-            elif normalized_action == "Stop Automation":
-                self.bci_processor.stop_automation()
-                return {"action": "success", "message": "Automation Stopped", "automation_active": False}
+            if normalized_action in ["Run BCI Automation", "Toggle Automation", "Start Automation", "Stop Automation"]:
+                return self._handle_automation_action(normalized_action, action)
 
-            elif str(normalized_action).strip().lower() in [
-                "close app", "close_app", "right_close_app",
-                "back to level 2", "back_to_level_2",
-                "return to level 1", "return_to_level_1",
-                "return to level 2", "return_to_level_2",
-                "back to level 1", "back_to_level_1",
-                "back to main dashboard", "back_to_main_dashboard"
-            ]:
+            if str(normalized_action).strip().lower() in CLOSE_ACTIONS:
                 self.close_browser()
                 return {"action": "success", "message": "Closed JioSaavn Chrome on exit"}
 
-            elif normalized_action == "Launch JioSaavn":
+            if normalized_action == ACTION_LAUNCH_JIOSAAVN:
                 self.browser_manager.open_new_tab("https://www.jiosaavn.com")
                 return {"action": "success", "message": "Opened JioSaavn in new tab"}
 
-            elif normalized_action == "Search Album/Playlist":
+            if normalized_action == "Search Album/Playlist":
                 target_query = query if query else (SONG_QUEUE[self._manual_song_idx % len(SONG_QUEUE)])
                 self._manual_song_idx += 1
                 logger.info(self.MODULE_NAME, f"Executing Search & Play for '{target_query}'...")
@@ -168,31 +191,15 @@ class JioSaavnController:
                 status = "success" if success else "failed"
                 return {"action": status, "message": f"Searched '{target_query}' ({status})"}
 
-            elif normalized_action == "Play / Pause":
-                success = self.player_engine.play_pause()
-                return f"Executed Play / Pause ({'Success' if success else 'Failed'})"
+            playback_res = self._handle_playback_action(normalized_action)
+            if playback_res is not None:
+                return playback_res
 
-            elif normalized_action == "Next Track":
-                success = self.player_engine.next_track()
-                return f"Executed Next Track ({'Success' if success else 'Failed'})"
-
-            elif normalized_action == "Previous Track":
-                success = self.player_engine.previous_track()
-                return f"Executed Previous Track ({'Success' if success else 'Failed'})"
-
-            elif normalized_action in ["Volume Up", "Volume Down"]:
-                success = self.player_engine.adjust_volume(normalized_action)
-                sys_vol = get_system_master_volume()
-                self.current_volume = float(sys_vol)
-                result = "Success" if success else "Failed"
-                logger.info(self.MODULE_NAME, f"Executed {normalized_action} -> Master Volume: {sys_vol}% ({result})")
-                return f"Executed {normalized_action} (Volume: {sys_vol}% - {result})"
-
-            elif normalized_action == "Return to Home":
+            if normalized_action == "Return to Home":
                 self.browser_manager.focus_or_open_tab("https://www.jiosaavn.com/")
                 return {"action": "success", "message": "Returned Home"}
 
-            elif normalized_action == "Select AI/ML Domain":
+            if normalized_action == "Select AI/ML Domain":
                 logger.info(self.MODULE_NAME, "AI/ML Domain Wake Signal Acknowledged.")
                 return {"action": "success", "message": "AI/ML Domain Acknowledged"}
 

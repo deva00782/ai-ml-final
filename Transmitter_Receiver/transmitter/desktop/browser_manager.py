@@ -20,6 +20,11 @@ from pathlib import Path
 from selenium import webdriver
 from logger import logger
 
+URL_JIOSAAVN = "https://www.jiosaavn.com"
+DOMAIN_JIOSAAVN = "jiosaavn.com"
+PREFIX_HTTP = "http://"
+PREFIX_HTTPS = "https://"
+
 
 class BrowserManager:
     MODULE_NAME = "BrowserManager"
@@ -44,54 +49,50 @@ class BrowserManager:
         except Exception:
             return False
 
+    def _is_debug_chrome_windows(self) -> bool:
+        try:
+            r = subprocess.run(
+                ['wmic', 'process', 'where', 'name="chrome.exe"', 'get', 'CommandLine'],
+                capture_output=True, text=True, timeout=3
+            )
+            if "remote-debugging-port" in r.stdout:
+                return True
+        except Exception:
+            pass
+        try:
+            r = subprocess.run(
+                ['powershell', '-Command',
+                 "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Select-Object -ExpandProperty CommandLine"],
+                capture_output=True, text=True, timeout=3
+            )
+            if "remote-debugging-port" in r.stdout:
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _is_debug_chrome_unix(self) -> bool:
+        pgrep = shutil.which("pgrep")
+        if pgrep:
+            r = subprocess.run([pgrep, "-f", f"remote-debugging-port={self.DEBUG_PORT}"],
+                               capture_output=True, text=True, timeout=2)
+            return r.returncode == 0 and bool(r.stdout.strip())
+        ps = shutil.which("ps")
+        if ps:
+            r = subprocess.run([ps, "aux"], capture_output=True, text=True, timeout=2)
+            if f"remote-debugging-port={self.DEBUG_PORT}" in r.stdout:
+                return True
+        return False
+
     def _is_debug_chrome_process_running(self) -> bool:
         """
         Cross-platform check: is a chrome process with --remote-debugging-port running?
         Returns False on error (so caller falls through to launch).
         """
-        system = self._system
         try:
-            if system == "Windows":
-                # Prefer WMIC which can filter on CommandLine
-                try:
-                    r = subprocess.run(
-                        ['wmic', 'process', 'where', 'name="chrome.exe"', 'get', 'CommandLine'],
-                        capture_output=True, text=True, timeout=3
-                    )
-                    if "remote-debugging-port" in r.stdout:
-                        return True
-                except Exception:
-                    pass
-                # Fallback: tasklist + best-effort cmdline via powershell
-                try:
-                    r = subprocess.run(
-                        ['powershell', '-Command',
-                         "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Select-Object -ExpandProperty CommandLine"],
-                        capture_output=True, text=True, timeout=3
-                    )
-                    if "remote-debugging-port" in r.stdout:
-                        return True
-                except Exception:
-                    pass
-                # Last fallback: if chrome.exe exists but port not open -> NOT debugging
-                return False
-
-            # macOS / Linux: pgrep -f on the flag, with fallbacks if pgrep missing
-            pgrep = shutil.which("pgrep")
-            if pgrep:
-                r = subprocess.run([pgrep, "-f", f"remote-debugging-port={self.DEBUG_PORT}"],
-                                   capture_output=True, text=True, timeout=2)
-                if r.returncode == 0 and r.stdout.strip():
-                    return True
-                # Also try generic chrome process check for log clarity
-                return False
-            # No pgrep: try ps
-            ps = shutil.which("ps")
-            if ps:
-                r = subprocess.run([ps, "aux"], capture_output=True, text=True, timeout=2)
-                if f"remote-debugging-port={self.DEBUG_PORT}" in r.stdout:
-                    return True
-            return False
+            if self._system == "Windows":
+                return self._is_debug_chrome_windows()
+            return self._is_debug_chrome_unix()
         except Exception:
             return False
 
@@ -110,7 +111,7 @@ class BrowserManager:
     # ------------------------------------------------------------------
     # Chrome status + auto-start
     # ------------------------------------------------------------------
-    def _check_chrome_status(self, url="https://www.jiosaavn.com"):
+    def _check_chrome_status(self, url=URL_JIOSAAVN):
         """
         Smart Chrome Status Detection with guarded auto-start:
         - Checks if port 9222 is open -> already debugging.
@@ -174,6 +175,20 @@ class BrowserManager:
     # ------------------------------------------------------------------
     # Selenium driver
     # ------------------------------------------------------------------
+    def _wait_for_port(self, timeout: float):
+        t_start = time.monotonic()
+        while time.monotonic() - t_start < timeout:
+            time.sleep(0.5)
+            if self._is_port_open():
+                break
+
+    def _get_attach_hint(self) -> str:
+        if self._system == "Windows":
+            return " (Windows: ensure Chrome was started with --remote-debugging-port=9222 and no other Chrome is blocking the port)"
+        if self._system == "Linux":
+            return " (Linux: ensure chrome --remote-debugging-port=9222 is running; check that /tmp or ~/chrome-debug-profile is writable)"
+        return ""
+
     def get_or_create_driver(self, wait_if_starting: bool = False, timeout: float = 15.0):
         """
         Persistent Driver Singleton:
@@ -193,11 +208,7 @@ class BrowserManager:
         if not self._is_port_open():
             self._check_chrome_status()
             if wait_if_starting:
-                t_start = time.monotonic()
-                while time.monotonic() - t_start < timeout:
-                    time.sleep(0.5)
-                    if self._is_port_open():
-                        break
+                self._wait_for_port(timeout)
 
         if not self._is_port_open():
             logger.debug(self.MODULE_NAME, f"Chrome port {self.DEBUG_PORT} is inactive. DOM automation disabled, using OS media keys instead.")
@@ -209,12 +220,7 @@ class BrowserManager:
             logger.success(self.MODULE_NAME, f"✅ Attached to Chrome instance on port {self.DEBUG_PORT} ({self._system})!")
             return self.driver
         except Exception as attach_err:
-            # Provide OS-specific hint
-            hint = ""
-            if self._system == "Windows":
-                hint = " (Windows: ensure Chrome was started with --remote-debugging-port=9222 and no other Chrome is blocking the port)"
-            elif self._system == "Linux":
-                hint = " (Linux: ensure chrome --remote-debugging-port=9222 is running; check that /tmp or ~/chrome-debug-profile is writable)"
+            hint = self._get_attach_hint()
             logger.error(self.MODULE_NAME, f"Failed to attach to Chrome on port {self.DEBUG_PORT}{hint}: {attach_err}")
             self.driver = None
             return None
@@ -239,7 +245,7 @@ class BrowserManager:
                 try:
                     driver.switch_to.window(handle)
                     curr_url = (driver.current_url or "").lower()
-                    if "jiosaavn.com" in curr_url:
+                    if DOMAIN_JIOSAAVN in curr_url:
                         logger.info(self.MODULE_NAME, f"Focused existing JioSaavn tab: {driver.current_url}")
                         return True
                 except Exception:
@@ -290,7 +296,7 @@ class BrowserManager:
             logger.warn(self.MODULE_NAME, f"JS click execution error for {description}: {e}")
             return False
 
-    def open_new_tab(self, url="https://www.jiosaavn.com"):
+    def open_new_tab(self, url=URL_JIOSAAVN):
         """
         Explicitly opens a new browser tab with the specified URL and switches focus to it.
         Cross-platform: uses Selenium new window API, fallback to window.open JS.
@@ -314,7 +320,7 @@ class BrowserManager:
                 time.sleep(0.5)
                 new_handles = set(driver.window_handles) - initial_handles
                 if new_handles:
-                    driver.switch_to.window(list(new_handles)[0])
+                    driver.switch_to.window(next(iter(new_handles)))
                 elif driver.window_handles:
                     driver.switch_to.window(driver.window_handles[-1])
             
@@ -936,6 +942,125 @@ class BrowserManager:
         Follows the exact implementation from JioSaavan/jiosaavn_controller.py.
         If start_playback is False, pauses playback immediately after queuing.
         """
+    def _navigate_to_trending_playlist(self, driver) -> bool:
+        curr_url = (driver.current_url or "").lower()
+        if DOMAIN_JIOSAAVN not in curr_url or any(x in curr_url for x in ["/song/", "/search", "/artist/", "/my-music/"]):
+            logger.info(self.MODULE_NAME, "Navigating to JioSaavn homepage to find first trending playlist...")
+            driver.get(URL_JIOSAAVN)
+            time.sleep(2.0)
+
+        js_find_playlist = """
+        const sections = document.querySelectorAll('section, .u-margin-bottom-large, .c-content__item, [class*="module"], [class*="section"], div[class*="content"]');
+        let trendingSection = null;
+
+        for (let sec of sections) {
+            let heading = sec.querySelector('h2, h3, .c-content__title, .u-color-js-gray');
+            if (heading) {
+                let headingText = (heading.innerText || heading.textContent || '').toLowerCase();
+                if (headingText.includes('trending') || headingText.includes('top chart') || headingText.includes('hot right now') || headingText.includes('new release')) {
+                    trendingSection = sec;
+                    break;
+                }
+            }
+        }
+
+        let searchRoot = trendingSection || document;
+        const trendingLinks = searchRoot.querySelectorAll('a[href*="/featured/"], a[href*="/album/"], a[href*="/playlist/"], a[href*="/mix/"]');
+
+        for (let el of trendingLinks) {
+            let href = el.getAttribute('href') || '';
+            let text = (el.innerText || el.textContent || '').trim().toLowerCase();
+            if (text.includes('log in') || text.includes('sign up') || text.includes('create')) continue;
+            if (!href || href === '#' || href === '/') continue;
+            if (el && (el.offsetParent !== null || el.offsetWidth > 0)) {
+                let fullUrl = href.startsWith('http') ? href : 'https://www.jiosaavn.com' + href;
+                return { success: true, url: fullUrl, source: trendingSection ? 'trending_section' : 'first_visible' };
+            }
+        }
+
+        const anyLink = document.querySelector('a[href*="/featured/"], a[href*="/album/"], a[href*="/playlist/"], a[href*="/song/"]');
+        if (anyLink) {
+            let href = anyLink.getAttribute('href') || '';
+            let fullUrl = href.startsWith('http') ? href : 'https://www.jiosaavn.com' + href;
+            return { success: true, url: fullUrl, source: 'fallback' };
+        }
+
+        return { success: false };
+        """
+        res = driver.execute_script(js_find_playlist)
+        if not res or not res.get("success"):
+            logger.warn(self.MODULE_NAME, "Could not find any playlist link on JioSaavn homepage.")
+            return False
+
+        playlist_url = res.get("url", "")
+        source = res.get("source", "unknown")
+        logger.info(self.MODULE_NAME, f"Navigating to playlist from '{source}': {playlist_url}")
+        driver.get(playlist_url)
+        time.sleep(2.0)
+        return True
+
+    def _click_play_all(self, driver) -> bool:
+        js_play_all = """
+        function clickEl(el) {
+            if (!el) return false;
+            try { el.focus(); } catch(e) {}
+            try { el.click(); return true; } catch(e) {}
+            try {
+                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                return true;
+            } catch(e2) { return false; }
+        }
+
+        const playAllSelectors = [
+            'a.c-btn--primary.js-play-button',
+            'button.c-btn--primary.js-play-button',
+            'a.c-btn--primary',
+            'button.c-btn--primary',
+            'a.js-play-button',
+            'button.js-play-button',
+            '.c-hero__action button',
+            '.c-hero__action a',
+            'button[aria-label*="Play All"]',
+            'a[aria-label*="Play All"]',
+            'button[aria-label*="Play"]',
+            'a[aria-label*="Play"]',
+            '#album_play',
+            '[data-testid="play-all-btn"]',
+            '[data-testid="play-btn"]'
+        ];
+
+        for (let sel of playAllSelectors) {
+            let elems = document.querySelectorAll(sel);
+            for (let el of elems) {
+                let text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                if (text.includes('new playlist') || text.includes('create') || text.includes('log in') || text.includes('sign up')) continue;
+                if (el && (el.offsetParent !== null || el.offsetWidth > 0)) {
+                    if (clickEl(el)) {
+                        return { success: true, clicked: true, selector: sel };
+                    }
+                }
+            }
+        }
+        return { success: false, clicked: false };
+        """
+
+        for _ in range(4):
+            play_res = driver.execute_script(js_play_all)
+            if play_res and play_res.get("clicked"):
+                logger.success(self.MODULE_NAME, f"✅ Clicked Play All button ({play_res.get('selector')})")
+                return True
+            time.sleep(0.5)
+
+        logger.warn(self.MODULE_NAME, "Could not click Play All button on playlist page.")
+        return False
+
+    def load_first_trending_playlist(self, start_playback=True) -> bool:
+        """
+        Finds the first playlist in 'Trending Now' / 'Top Trending' on JioSaavn,
+        navigates into it, and queues the ENTIRE playlist using 'Play All'.
+        Follows the exact implementation from JioSaavan/jiosaavn_controller.py.
+        If start_playback is False, pauses playback immediately after queuing.
+        """
         driver = self.get_or_create_driver(wait_if_starting=True, timeout=15.0)
         if not driver:
             logger.warn(self.MODULE_NAME, "No driver available for load_first_trending_playlist")
@@ -943,138 +1068,27 @@ class BrowserManager:
 
         if not self.focus_or_get_jiosaavn_tab():
             logger.info(self.MODULE_NAME, "Opening JioSaavn tab...")
-            self.focus_or_open_tab("https://www.jiosaavn.com")
+            self.focus_or_open_tab(URL_JIOSAAVN)
             time.sleep(2.5)
 
         try:
             curr_url = (driver.current_url or "").lower()
             is_playlist_page = any(x in curr_url for x in ["/featured/", "/album/", "/playlist/", "/mix/"])
-
             if not is_playlist_page:
-                # Step 1: Ensure we are on JioSaavn homepage to find trending playlists
-                if "jiosaavn.com" not in curr_url or any(x in curr_url for x in ["/song/", "/search", "/artist/", "/my-music/"]):
-                    logger.info(self.MODULE_NAME, "Navigating to JioSaavn homepage to find first trending playlist...")
-                    driver.get("https://www.jiosaavn.com")
-                    time.sleep(2.0)
-
-                # Step 2: Extract first trending playlist URL from DOM (exact JioSaavan script)
-                js_find_playlist = """
-                const sections = document.querySelectorAll('section, .u-margin-bottom-large, .c-content__item, [class*="module"], [class*="section"], div[class*="content"]');
-                let trendingSection = null;
-
-                for (let sec of sections) {
-                    let heading = sec.querySelector('h2, h3, .c-content__title, .u-color-js-gray');
-                    if (heading) {
-                        let headingText = (heading.innerText || heading.textContent || '').toLowerCase();
-                        if (headingText.includes('trending') || headingText.includes('top chart') || headingText.includes('hot right now') || headingText.includes('new release')) {
-                            trendingSection = sec;
-                            break;
-                        }
-                    }
-                }
-
-                let searchRoot = trendingSection || document;
-                const trendingLinks = searchRoot.querySelectorAll('a[href*="/featured/"], a[href*="/album/"], a[href*="/playlist/"], a[href*="/mix/"]');
-
-                for (let el of trendingLinks) {
-                    let href = el.getAttribute('href') || '';
-                    let text = (el.innerText || el.textContent || '').trim().toLowerCase();
-                    if (text.includes('log in') || text.includes('sign up') || text.includes('create')) continue;
-                    if (!href || href === '#' || href === '/') continue;
-                    if (el && (el.offsetParent !== null || el.offsetWidth > 0)) {
-                        let fullUrl = href.startsWith('http') ? href : 'https://www.jiosaavn.com' + href;
-                        return { success: true, url: fullUrl, source: trendingSection ? 'trending_section' : 'first_visible' };
-                    }
-                }
-
-                const anyLink = document.querySelector('a[href*="/featured/"], a[href*="/album/"], a[href*="/playlist/"], a[href*="/song/"]');
-                if (anyLink) {
-                    let href = anyLink.getAttribute('href') || '';
-                    let fullUrl = href.startsWith('http') ? href : 'https://www.jiosaavn.com' + href;
-                    return { success: true, url: fullUrl, source: 'fallback' };
-                }
-
-                return { success: false };
-                """
-                res = driver.execute_script(js_find_playlist)
-                if not res or not res.get("success"):
-                    logger.warn(self.MODULE_NAME, "Could not find any playlist link on JioSaavn homepage.")
+                if not self._navigate_to_trending_playlist(driver):
                     return False
-
-                playlist_url = res.get("url", "")
-                source = res.get("source", "unknown")
-                logger.info(self.MODULE_NAME, f"Navigating to playlist from '{source}': {playlist_url}")
-                driver.get(playlist_url)
-                time.sleep(2.0)
             else:
                 logger.info(self.MODULE_NAME, f"Already on playlist page ({driver.current_url}). Playing all tracks directly...")
 
-            # Step 4: Click 'Play All' to queue ENTIRE playlist (exact JioSaavan script)
-            js_play_all = """
-            function clickEl(el) {
-                if (!el) return false;
-                try { el.focus(); } catch(e) {}
-                try { el.click(); return true; } catch(e) {}
-                try {
-                    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                    return true;
-                } catch(e2) { return false; }
-            }
-
-            const playAllSelectors = [
-                'a.c-btn--primary.js-play-button',
-                'button.c-btn--primary.js-play-button',
-                'a.c-btn--primary',
-                'button.c-btn--primary',
-                'a.js-play-button',
-                'button.js-play-button',
-                '.c-hero__action button',
-                '.c-hero__action a',
-                'button[aria-label*="Play All"]',
-                'a[aria-label*="Play All"]',
-                'button[aria-label*="Play"]',
-                'a[aria-label*="Play"]',
-                '#album_play',
-                '[data-testid="play-all-btn"]',
-                '[data-testid="play-btn"]'
-            ];
-
-            for (let sel of playAllSelectors) {
-                let elems = document.querySelectorAll(sel);
-                for (let el of elems) {
-                    let text = (el.innerText || el.textContent || '').trim().toLowerCase();
-                    if (text.includes('new playlist') || text.includes('create') || text.includes('log in') || text.includes('sign up')) continue;
-                    if (el && (el.offsetParent !== null || el.offsetWidth > 0)) {
-                        if (clickEl(el)) {
-                            return { success: true, clicked: true, selector: sel };
-                        }
-                    }
-                }
-            }
-            return { success: false, clicked: false };
-            """
-
-            clicked = False
-            for _ in range(4):
-                play_res = driver.execute_script(js_play_all)
-                if play_res and play_res.get("clicked"):
-                    clicked = True
-                    logger.success(self.MODULE_NAME, f"✅ Clicked Play All button ({play_res.get('selector')})")
-                    break
-                time.sleep(0.5)
-
-            if not clicked:
-                logger.warn(self.MODULE_NAME, "Could not click Play All button on playlist page.")
+            if not self._click_play_all(driver):
                 return False
 
             time.sleep(0.8)
-
             if not start_playback:
                 self.pause()
                 logger.info(self.MODULE_NAME, "Queued entire playlist and paused playback.")
             else:
                 logger.success(self.MODULE_NAME, "✅ Queued ENTIRE playlist and started playback.")
-
             return True
 
         except Exception as err:
@@ -1094,7 +1108,7 @@ class BrowserManager:
 
         return self.load_first_trending_playlist(start_playback=start_playback)
 
-    def focus_or_open_tab(self, url="https://www.jiosaavn.com"):
+    def focus_or_open_tab(self, url=URL_JIOSAAVN):
         """
         Focuses an existing JioSaavn tab, or navigates current tab / opens url.
         Cross-platform.
@@ -1107,7 +1121,7 @@ class BrowserManager:
             for handle in driver.window_handles:
                 try:
                     driver.switch_to.window(handle)
-                    if "jiosaavn.com" in (driver.current_url or "").lower():
+                    if DOMAIN_JIOSAAVN in (driver.current_url or "").lower():
                         if url and (driver.current_url or "").rstrip('/') != url.rstrip('/'):
                             driver.get(url)
                         logger.info(self.MODULE_NAME, f"Focused JioSaavn tab: {driver.current_url}")
@@ -1139,7 +1153,7 @@ class BrowserManager:
 
         try:
             encoded_query = urllib.parse.quote(query.strip())
-            api_url = f"https://www.jiosaavn.com/api.php?__call=autocomplete.get&query={encoded_query}&_format=json&_marker=0&ctx=web6dot0"
+            api_url = f"{URL_JIOSAAVN}/api.php?__call=autocomplete.get&query={encoded_query}&_format=json&_marker=0&ctx=web6dot0"
             req = urllib.request.Request(
                 api_url,
                 headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
@@ -1147,38 +1161,64 @@ class BrowserManager:
             with urllib.request.urlopen(req, timeout=4) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
 
-            # Priority 1: Top query match
-            if 'topquery' in data and isinstance(data['topquery'].get('data'), list) and len(data['topquery']['data']) > 0:
-                item = data['topquery']['data'][0]
-                url = item.get('url', '').replace('http://', 'https://')
-                if url:
-                    return (url, item.get('title', query), item.get('type', 'Top Match'))
-
-            # Priority 2: Songs match
-            if 'songs' in data and isinstance(data['songs'].get('data'), list) and len(data['songs']['data']) > 0:
-                item = data['songs']['data'][0]
-                url = item.get('url', '').replace('http://', 'https://')
-                if url:
-                    return (url, item.get('title', query), 'Song')
-
-            # Priority 3: Albums match
-            if 'albums' in data and isinstance(data['albums'].get('data'), list) and len(data['albums']['data']) > 0:
-                item = data['albums']['data'][0]
-                url = item.get('url', '').replace('http://', 'https://')
-                if url:
-                    return (url, item.get('title', query), 'Album')
-
-            # Priority 4: Playlists match
-            if 'playlists' in data and isinstance(data['playlists'].get('data'), list) and len(data['playlists']['data']) > 0:
-                item = data['playlists']['data'][0]
-                url = item.get('url', '').replace('http://', 'https://')
-                if url:
-                    return (url, item.get('title', query), 'Playlist')
+            sections = [
+                ('topquery', 'Top Match'),
+                ('songs', 'Song'),
+                ('albums', 'Album'),
+                ('playlists', 'Playlist')
+            ]
+            for section, default_type in sections:
+                sec_data = data.get(section)
+                if isinstance(sec_data, dict):
+                    items = sec_data.get('data')
+                    if isinstance(items, list) and len(items) > 0:
+                        item = items[0]
+                        url = item.get('url', '').replace(PREFIX_HTTP, PREFIX_HTTPS)
+                        if url:
+                            return (url, item.get('title', query), item.get('type', default_type))
 
         except Exception as err:
             logger.debug(self.MODULE_NAME, f"Autocomplete API query error: {err}")
 
         return (None, None, None)
+
+    def _search_via_in_page_input(self, driver, query: str):
+        logger.info(self.MODULE_NAME, f"No direct URL match. Using in-page search bar for '{query}'...")
+        js_in_page_search = """
+        const query = arguments[0];
+        const input = document.querySelector('input[type="search"], input[placeholder*="Search" i], header input, .c-header__search input');
+        if (input) {
+            input.focus();
+            input.value = query;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+            return true;
+        }
+        return false;
+        """
+        searched = driver.execute_script(js_in_page_search, query)
+        time.sleep(2.0)
+        if searched:
+            js_click_first_result = """
+            const resultSelectors = [
+                '.c-header__search-results a',
+                '.c-search__result a',
+                '[role="listbox"] [role="option"] a',
+                '.o-snippet a',
+                '.c-song a'
+            ];
+            for (let sel of resultSelectors) {
+                let el = document.querySelector(sel);
+                if (el && (el.offsetParent !== null || el.offsetWidth > 0)) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+            """
+            driver.execute_script(js_click_first_result)
+            time.sleep(2.0)
 
     def in_tab_search_and_play(self, query):
         """
@@ -1197,7 +1237,7 @@ class BrowserManager:
 
         # Ensure JioSaavn tab is active
         if not self.focus_or_get_jiosaavn_tab():
-            if not self.focus_or_open_tab("https://www.jiosaavn.com"):
+            if not self.focus_or_open_tab(URL_JIOSAAVN):
                 logger.warn(self.MODULE_NAME, "Cannot perform search: No active JioSaavn tab found on port 9222.")
                 return False
 
@@ -1218,42 +1258,7 @@ class BrowserManager:
                 driver.get(target_url)
                 time.sleep(2.0)
             else:
-                logger.info(self.MODULE_NAME, f"No direct URL match. Using in-page search bar for '{query}'...")
-                js_in_page_search = """
-                const query = arguments[0];
-                const input = document.querySelector('input[type="search"], input[placeholder*="Search" i], header input, .c-header__search input');
-                if (input) {
-                    input.focus();
-                    input.value = query;
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
-                    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                    return true;
-                }
-                return false;
-                """
-                searched = driver.execute_script(js_in_page_search, query)
-                time.sleep(2.0)
-                if searched:
-                    js_click_first_result = """
-                    const resultSelectors = [
-                        '.c-header__search-results a',
-                        '.c-search__result a',
-                        '[role="listbox"] [role="option"] a',
-                        '.o-snippet a',
-                        '.c-song a'
-                    ];
-                    for (let sel of resultSelectors) {
-                        let el = document.querySelector(sel);
-                        if (el && (el.offsetParent !== null || el.offsetWidth > 0)) {
-                            el.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                    """
-                    driver.execute_script(js_click_first_result)
-                    time.sleep(2.0)
+                self._search_via_in_page_input(driver, query)
 
             # Phase 2: Start playback directly via the page's primary Play button
             logger.info(self.MODULE_NAME, f"Loading '{title or query}' into player and starting playback...")
@@ -1305,7 +1310,7 @@ class BrowserManager:
         try:
             res = self.driver.execute_script(js_direct_button)
             if res and res.get("success"):
-                logger.success(self.MODULE_NAME, f"✅ Added to queue via direct button")
+                logger.success(self.MODULE_NAME, "✅ Added to queue via direct button")
                 return True
         except Exception as e:
             logger.debug(self.MODULE_NAME, f"Direct queue button error: {e}")
@@ -1442,8 +1447,8 @@ class BrowserManager:
         """
         logger.info(self.MODULE_NAME, "Closing opened Chrome browser session...")
         
-        # 1. Terminate tracked subprocess directly if available
-        if hasattr(self, '_chrome_proc') and self._chrome_proc:
+    def _terminate_chrome_proc(self):
+        if getattr(self, '_chrome_proc', None):
             try:
                 self._chrome_proc.terminate()
                 self._chrome_proc.poll()
@@ -1451,25 +1456,25 @@ class BrowserManager:
                 pass
             self._chrome_proc = None
 
-        # 2. Gracefully close open tabs via WebDriver if attached
-        if self.driver is not None:
-            try:
-                handles = list(self.driver.window_handles)
-                for h in handles:
-                    try:
-                        self.driver.switch_to.window(h)
-                        self.driver.close()
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.debug(self.MODULE_NAME, f"Tab close notice: {e}")
-            try:
-                self.driver.quit()
-            except Exception as e:
-                logger.debug(self.MODULE_NAME, f"Driver quit notice: {e}")
-            self.driver = None
+    def _close_driver_tabs(self):
+        if self.driver is None:
+            return
+        try:
+            for h in list(self.driver.window_handles):
+                try:
+                    self.driver.switch_to.window(h)
+                    self.driver.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(self.MODULE_NAME, f"Tab close notice: {e}")
+        try:
+            self.driver.quit()
+        except Exception as e:
+            logger.debug(self.MODULE_NAME, f"Driver quit notice: {e}")
+        self.driver = None
 
-        # 3. Terminate remaining process on port 9222 or matching remote-debugging-port
+    def _kill_debug_port_process(self):
         try:
             if self._system == "Windows":
                 cmd = (
@@ -1484,6 +1489,15 @@ class BrowserManager:
         except Exception as e:
             logger.debug(self.MODULE_NAME, f"Process kill notice: {e}")
 
+    def close_browser(self) -> bool:
+        """
+        Closes the active debug Chrome browser instance and cleans up processes.
+        Gracefully closes tabs and terminates only the Chrome instance bound to DEBUG_PORT (9222).
+        """
+        logger.info(self.MODULE_NAME, "Closing opened Chrome browser session...")
+        self._terminate_chrome_proc()
+        self._close_driver_tabs()
+        self._kill_debug_port_process()
         self._last_launch_attempt = 0.0
         logger.success(self.MODULE_NAME, "✅ Opened Chrome browser closed successfully.")
         return True

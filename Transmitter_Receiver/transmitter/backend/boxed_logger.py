@@ -190,6 +190,37 @@ class TeeStream:
         return getattr(self.original_stream, name)
 
 
+def _rotate_log_file(target: Path, max_bytes: int):
+    try:
+        if target.is_file() and target.stat().st_size > max_bytes:
+            backup = target.with_suffix(".log.1")
+            if backup.is_file():
+                backup.unlink()
+            target.rename(backup)
+    except Exception:
+        pass
+
+
+def _open_log_handle(p, max_bytes: int):
+    target = Path(p)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_log_file(target, max_bytes)
+        return open(target, "a", encoding="utf-8", errors="replace")
+    except Exception as e:
+        sys.stderr.write(f"[WARN] Failed to open log file {target}: {e}\n")
+        return None
+
+
+def _close_all_log_files():
+    for h in _LOG_FILES:
+        try:
+            h.flush()
+            h.close()
+        except Exception:
+            pass
+
+
 def setup_terminal_logger(log_paths=None, max_bytes=10 * 1024 * 1024):
     """Enable full terminal output capture to terminal.log.
 
@@ -206,23 +237,10 @@ def setup_terminal_logger(log_paths=None, max_bytes=10 * 1024 * 1024):
     handles = []
 
     for p in paths:
-        target = Path(p)
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.is_file() and target.stat().st_size > max_bytes:
-                backup = target.with_suffix(".log.1")
-                try:
-                    if backup.is_file():
-                        backup.unlink()
-                    target.rename(backup)
-                except Exception:
-                    pass
-
-            fh = open(target, "a", encoding="utf-8", errors="replace")
+        fh = _open_log_handle(p, max_bytes)
+        if fh:
             handles.append(fh)
             _LOG_FILES.append(fh)
-        except Exception as e:
-            sys.stderr.write(f"[WARN] Failed to open log file {target}: {e}\n")
 
     if handles:
         if not isinstance(sys.stdout, TeeStream):
@@ -231,16 +249,7 @@ def setup_terminal_logger(log_paths=None, max_bytes=10 * 1024 * 1024):
             sys.stderr = TeeStream(sys.stderr, handles, _LOG_LOCK)
 
         _TEE_INSTALLED = True
-
-        def _close_logs():
-            for h in _LOG_FILES:
-                try:
-                    h.flush()
-                    h.close()
-                except Exception:
-                    pass
-
-        atexit.register(_close_logs)
+        atexit.register(_close_all_log_files)
 
     return get_log_path()
 

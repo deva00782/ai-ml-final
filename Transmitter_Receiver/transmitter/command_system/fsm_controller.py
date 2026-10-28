@@ -268,7 +268,7 @@ class FSMController:
         self.logger.info("[STATE] Current State: %s", STATE_LABELS.get(self.current_state))
         self.logger.info("[COMMAND] Received: %s (confidence=%s)", primitive, confidence)
 
-        result = self._dispatch_primitive(primitive, confidence, timestamp)
+        result = self._dispatch_primitive(primitive)
 
         # Enrich result for UI: raw command, confidence, level, timestamp, latency
         result["raw_command"] = primitive.upper()
@@ -827,7 +827,7 @@ class FSMController:
     # ------------------------------------------------------------------
     # State handlers
     # ------------------------------------------------------------------
-    def _dispatch_primitive(self, primitive, confidence, timestamp):
+    def _dispatch_primitive(self, primitive):
         # A pending combination only stays valid for combo_timeout seconds.
         # If the second command arrives too late, the stale 'right' prefix is
         # dropped and the new command is interpreted normally in its own state.

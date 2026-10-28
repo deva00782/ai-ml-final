@@ -40,25 +40,35 @@ RANDOM_SONGS_POOL = [
     "Espresso Sabrina Carpenter"
 ]
 
+CMD_OPEN_JIOSAAVN = "Open JioSaavn"
+CMD_PLAY_PAUSE = "Play / Pause"
+CMD_NEXT_TRACK = "Next Track"
+CMD_PREV_TRACK = "Previous Track"
+CMD_VOLUME_UP = "Volume Up"
+CMD_VOLUME_DOWN = "Volume Down"
+CMD_SEARCH_PLAYLIST = "Search Album/Playlist"
+CMD_RETURN_HOME = "Return to Home"
+CMD_LAUNCH_JIOSAAVN = "Launch JioSaavn"
+
 COMMAND_MAPPING = {
     "Right": "Select AI/ML Domain",
-    "Right_jiosaavn": "Open JioSaavn",
-    "Right_Play_Pause": "Play / Pause",
-    "Right_Next_Song": "Next Track",
-    "Right_Previous_Song": "Previous Track",
-    "Right_Volume_Up": "Volume Up",
-    "Right_Volume_Down": "Volume Down",
-    "Right_Search_Playlist": "Search Album/Playlist",
-    "Drop": "Return to Home",
-    "Right_Return_to_Home": "Return to Home",
-    "Play / Pause": "Play / Pause",
-    "Next Track": "Next Track",
-    "Previous Track": "Previous Track",
-    "Volume Up": "Volume Up",
-    "Volume Down": "Volume Down",
-    "Search Album/Playlist": "Search Album/Playlist",
-    "Search": "Search Album/Playlist",
-    "SEARCH": "Search Album/Playlist",
+    "Right_jiosaavn": CMD_OPEN_JIOSAAVN,
+    "Right_Play_Pause": CMD_PLAY_PAUSE,
+    "Right_Next_Song": CMD_NEXT_TRACK,
+    "Right_Previous_Song": CMD_PREV_TRACK,
+    "Right_Volume_Up": CMD_VOLUME_UP,
+    "Right_Volume_Down": CMD_VOLUME_DOWN,
+    "Right_Search_Playlist": CMD_SEARCH_PLAYLIST,
+    "Drop": CMD_RETURN_HOME,
+    "Right_Return_to_Home": CMD_RETURN_HOME,
+    "Play / Pause": CMD_PLAY_PAUSE,
+    "Next Track": CMD_NEXT_TRACK,
+    "Previous Track": CMD_PREV_TRACK,
+    "Volume Up": CMD_VOLUME_UP,
+    "Volume Down": CMD_VOLUME_DOWN,
+    "Search Album/Playlist": CMD_SEARCH_PLAYLIST,
+    "Search": CMD_SEARCH_PLAYLIST,
+    "SEARCH": CMD_SEARCH_PLAYLIST,
     "Right_Close_App": "Right_Close_App",
     "Close_App": "Right_Close_App",
     "Close App": "Right_Close_App",
@@ -71,21 +81,21 @@ COMMAND_MAPPING = {
     "Return to Level 2": "Right_Close_App",
     "return_to_level_2": "Right_Close_App",
     "back_to_main_dashboard": "Right_Close_App",
-    "Launch JioSaavn": "Launch JioSaavn",
-    "Open JioSaavn": "Launch JioSaavn",
+    "Launch JioSaavn": CMD_LAUNCH_JIOSAAVN,
+    "Open JioSaavn": CMD_LAUNCH_JIOSAAVN,
 }
 
 DISPLAY_LABELS = {
     "Right": "AI/ML Domain Wake",
     "Right_jiosaavn": "Open JioSaavn Web App",
-    "Right_Play_Pause": "Play / Pause",
-    "Right_Next_Song": "Next Track",
-    "Right_Previous_Song": "Previous Track",
+    "Right_Play_Pause": CMD_PLAY_PAUSE,
+    "Right_Next_Song": CMD_NEXT_TRACK,
+    "Right_Previous_Song": CMD_PREV_TRACK,
     "Right_Volume_Up": "Volume Up (+10%)",
     "Right_Volume_Down": "Volume Down (-10%)",
     "Right_Search_Playlist": "Search & Play Playlist",
-    "Drop": "Return to Home",
-    "Right_Return_to_Home": "Return to Home"
+    "Drop": CMD_RETURN_HOME,
+    "Right_Return_to_Home": CMD_RETURN_HOME
 }
 
 class BCISignalFilter:
@@ -110,14 +120,14 @@ class BCISignalFilter:
 
         # Allow volume repeats only after cooldown
         if action == self.previous_action:
-            if action in ["Volume Up", "Volume Down"]:
+            if action in [CMD_VOLUME_UP, CMD_VOLUME_DOWN]:
                 if (current_timestamp - self.last_volume_time) >= self.volume_cooldown:
                     self.last_volume_time = current_timestamp
                     return action
             return "None"
 
         self.previous_action = action
-        if action in ["Volume Up", "Volume Down"]:
+        if action in [CMD_VOLUME_UP, CMD_VOLUME_DOWN]:
             self.last_volume_time = current_timestamp
         return action
 
@@ -150,7 +160,7 @@ class BCIPipelineProcessor:
         with self._lock:
             if self._is_running:
                 logger.info(self.MODULE_NAME, "Automation pipeline is already running.")
-                return True
+                return False
             self._is_running = True
 
         logger.success(self.MODULE_NAME, "🚀 Starting AI/ML BCI Automation Infinite Loop...")
@@ -174,9 +184,8 @@ class BCIPipelineProcessor:
         if self.is_running():
             self.stop_automation()
             return False
-        else:
-            self.start_automation()
-            return True
+        self.start_automation()
+        return True
 
     def run_pipeline(self):
         """Single-pass pipeline alias (backward compatibility)."""
@@ -191,6 +200,33 @@ class BCIPipelineProcessor:
             time.sleep(0.1)
         return False
 
+    def _load_dataset(self, json_path: Path):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                raw_data = json.load(f)
+            if isinstance(raw_data, dict):
+                return raw_data.get("data", [])
+            if isinstance(raw_data, list):
+                return raw_data
+            return []
+        except Exception as e:
+            logger.error(self.MODULE_NAME, f"Failed to read dataset file '{json_path}': {e}")
+            return None
+
+    def _execute_bci_action(self, action_to_trigger: str, song_index: int) -> int:
+        if action_to_trigger == CMD_SEARCH_PLAYLIST:
+            target_song = SONG_QUEUE[song_index % len(SONG_QUEUE)]
+            logger.info(self.MODULE_NAME, f"BCI Trigger: Searching queue item #{song_index + 1}: '{target_song}'")
+            self.facade.execute_action(CMD_SEARCH_PLAYLIST, query=target_song)
+            return song_index + 1
+        elif action_to_trigger in [CMD_OPEN_JIOSAAVN, CMD_LAUNCH_JIOSAAVN]:
+            self.facade.execute_action(CMD_LAUNCH_JIOSAAVN)
+        elif action_to_trigger == "Select AI/ML Domain":
+            logger.info(self.MODULE_NAME, "AI/ML Domain Wake Signal Acknowledged.")
+        else:
+            self.facade.execute_action(action_to_trigger)
+        return song_index
+
     def _automation_loop(self):
         """Infinite loop iterating through data/integrated_eeg.json considering only AI/ML domain."""
         json_path = DATA_FILE_PATH if DATA_FILE_PATH.exists() else (Path(__file__).parent / "integrated_eeg.json")
@@ -200,16 +236,11 @@ class BCIPipelineProcessor:
         loop_pass = 1
 
         while self._is_running:
-            try:
-                with open(json_path, "r", encoding="utf-8") as f:
-                    raw_data = json.load(f)
-            except Exception as e:
-                logger.error(self.MODULE_NAME, f"Failed to read dataset file '{json_path}': {e}")
+            entries = self._load_dataset(json_path)
+            if entries is None:
                 if self.interruptible_sleep(3.0):
                     break
                 continue
-
-            entries = raw_data.get("data", []) if isinstance(raw_data, dict) else (raw_data if isinstance(raw_data, list) else [])
             if not entries:
                 logger.warn(self.MODULE_NAME, "No data entries found in BCI dataset.")
                 if self.interruptible_sleep(3.0):
@@ -227,34 +258,26 @@ class BCIPipelineProcessor:
                 if not self._is_running:
                     break
 
-                domain = entry.get("domain")
-                # STRICT FILTER: Only consider AI/ML domain
-                if domain != TARGET_DOMAIN:
+                if entry.get("domain") != TARGET_DOMAIN:
                     continue
 
                 raw_command = entry.get("command", "Neutral")
                 confidence = float(entry.get("confidence", 0.0))
                 timestamp = float(entry.get("timestamp", time.time()))
 
-                # Avoid duplicate timestamp processing within same pass
-                if timestamp <= last_processed_timestamp:
+                if timestamp <= last_processed_timestamp or confidence < self.bci_filter.threshold:
+                    if timestamp > last_processed_timestamp:
+                        last_processed_timestamp = timestamp
                     continue
 
-                # Threshold check
-                if confidence < self.bci_filter.threshold:
-                    last_processed_timestamp = timestamp
-                    continue
-
-                display_label = DISPLAY_LABELS.get(raw_command, raw_command)
                 action_to_trigger = COMMAND_MAPPING.get(raw_command)
-
                 if not action_to_trigger:
                     last_processed_timestamp = timestamp
                     continue
 
                 logger.success(self.MODULE_NAME, f"🧠 [AI/ML Sample #{idx}] Command: '{raw_command}' -> Action: '{action_to_trigger}' (Confidence: {confidence * 100:.1f}%)")
 
-                # Broadcast live command dispatch event to Web Dashboard
+                display_label = DISPLAY_LABELS.get(raw_command, raw_command)
                 self.emit_event('command_dispatched', {
                     "command": raw_command,
                     "display_label": display_label,
@@ -265,22 +288,9 @@ class BCIPipelineProcessor:
                     "sample": entry.get("sample", idx)
                 })
 
-                # Execute action in JioSaavn
-                if action_to_trigger == "Search Album/Playlist":
-                    target_song = SONG_QUEUE[song_index % len(SONG_QUEUE)]
-                    logger.info(self.MODULE_NAME, f"BCI Trigger: Searching queue item #{song_index + 1}: '{target_song}'")
-                    self.facade.execute_action("Search Album/Playlist", query=target_song)
-                    song_index += 1
-                elif action_to_trigger in ["Open JioSaavn", "Launch JioSaavn"]:
-                    self.facade.execute_action("Launch JioSaavn")
-                elif action_to_trigger == "Select AI/ML Domain":
-                    logger.info(self.MODULE_NAME, "AI/ML Domain Wake Signal Acknowledged.")
-                else:
-                    self.facade.execute_action(action_to_trigger)
-
+                song_index = self._execute_bci_action(action_to_trigger, song_index)
                 last_processed_timestamp = timestamp
 
-                # 3-second delay between commands
                 if self.interruptible_sleep(3.0):
                     break
 

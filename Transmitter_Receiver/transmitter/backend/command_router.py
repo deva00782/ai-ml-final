@@ -12,6 +12,7 @@ Only remote-targeted commands (mobile, ios, uart, desktop) are persisted to
 PostgreSQL command_history. Local desktop execution is never recorded.
 """
 
+from typing import Optional
 import time
 import uuid
 from .device_manager import device_manager
@@ -20,6 +21,12 @@ try:
     from .postgres_store import get_postgres_store
 except ImportError:
     get_postgres_store = None
+
+
+SEARCH_COMMAND_ALIASES = (
+    "SEARCH", "Right_Search_Playlist", "Search Album/Playlist",
+    "Search", "RIGHT", "search", "search_album_playlist",
+)
 
 
 class CommandRouter:
@@ -57,7 +64,7 @@ class CommandRouter:
         song_url: str = None,
         title: str = None,
         payload: dict = None,
-    ) -> int:
+    ) -> Optional[int]:
         """Record command as received. Returns command_history ID or None."""
         pg = self._get_pg_store()
         if not pg:
@@ -129,189 +136,153 @@ class CommandRouter:
             error_message=error_message,
         )
 
-    def route(self, command, target="mobile", query=None):
-        # Sprint 11 targets (mobile/desktop) are the working baseline and are
-        # retained. Sprint 12 additive targets: "ios" (MQTT iOS topic) and
-        # "uart" (explicit UART transmit). Desktop NEVER executes locally on
-        # the transmitter PC - it is always forwarded via UART (Sprint 11 rule).
-        if target not in ("mobile", "desktop", "ios", "uart"):
-            raise ValueError(f"Unknown target: {target} (expected 'mobile', 'desktop', 'ios', or 'uart')")
-
-        is_remote = self._is_remote_target(target)
+    def _route_uart(self, command, query):
         cmd_history_id = None
-
-        if target == "uart":
-            try:
-                try:
-                    from .uart_transmitter import uart_transmitter
-                except ImportError:
-                    from uart_transmitter import uart_transmitter
-                if uart_transmitter and uart_transmitter.enabled:
-                    is_search_cmd = command in (
-                        "SEARCH", "Right_Search_Playlist", "Search Album/Playlist",
-                        "Search", "RIGHT", "search", "search_album_playlist",
-                    )
-                    if is_search_cmd:
-                        effective_query = (query or "").strip() if (query and str(query).strip()) else "Inaam"
-                        cmd_history_id = self._record_command_received(
-                            command, "uart", "uart", query=effective_query, song_url=effective_query, title=effective_query
-                        )
-                        uart_transmitter.send_search(effective_query)
-                        if cmd_history_id:
-                            self._update_command_published(cmd_history_id)
-                        return {"command": command, "target": "uart", "dispatched": True, "channel": "uart", "query": effective_query, "cmd_history_id": cmd_history_id}
-                    cmd_history_id = self._record_command_received(command, "uart", "uart")
-                    uart_transmitter.send_action(command)
-                    if cmd_history_id:
-                        self._update_command_published(cmd_history_id)
-                    return {"command": command, "target": "uart", "dispatched": True, "channel": "uart", "cmd_history_id": cmd_history_id}
-                if cmd_history_id:
-                    self._update_command_failed(cmd_history_id, "UART disabled")
-                return {"command": command, "target": "uart", "dispatched": False, "reason": "UART disabled"}
-            except Exception as e:
-                if cmd_history_id:
-                    self._update_command_failed(cmd_history_id, str(e))
-                return {"command": command, "target": "uart", "dispatched": False, "reason": str(e)}
-
-        if target in ("mobile", "ios"):
-            mqtt = device_manager.get_mobile().get("mqtt_service")
-            if mqtt is None:
-                return {
-                    "command": command,
-                    "target": target,
-                    "dispatched": False,
-                    "reason": "mobile backend not registered",
-                }
-            client = getattr(mqtt, "client", None)
-            if client is None or not client.is_connected():
-                return {
-                    "command": command,
-                    "target": target,
-                    "dispatched": False,
-                    "reason": "MQTT not connected (broker unreachable) - APK will not receive the command",
-                }
-
-            now = time.time()
-            if command == "Right_Play_Pause":
-                if self._last_mobile_publish["command"] == command and (now - self._last_mobile_publish["ts"]) < 1.0:
-                    return {
-                        "command": command,
-                        "target": target,
-                        "dispatched": True,
-                        "channel": "mqtt",
-                        "reason": "duplicate play/pause suppressed within 1s (single action only)",
-                    }
-                self._last_mobile_publish = {"command": command, "ts": now}
-
-            # Sprint 12 & 14: SEARCH / Right_Search_Playlist with dynamic or fallback query
-            is_search_cmd = command in (
-                "SEARCH", "Right_Search_Playlist", "Search Album/Playlist",
-                "Search", "RIGHT", "search", "search_album_playlist",
-            )
-            if is_search_cmd:
-                effective_query = (query or "").strip() if (query and str(query).strip()) else "Inaam"
-                try:
-                    # Record as received before publishing
-                    cmd_history_id = self._record_command_received(
-                        command, "mqtt", target, mqtt, query=effective_query
-                    )
-                    search_res = mqtt.publish_search_command(effective_query, target=target)
-                    song_url = (search_res or {}).get("song_url", "")
-                    song_title = (search_res or {}).get("title", effective_query)
-                    if cmd_history_id:
-                        # Update with search results
-                        pg = self._get_pg_store()
-                        if pg:
-                            with pg._get_connection() as conn:
-                                with conn.cursor() as cur:
-                                    cur.execute(
-                                        "UPDATE command_history SET song_url = %s, title = %s, status = 'published', updated_at = NOW() WHERE id = %s",
-                                        (song_url, song_title, cmd_history_id),
-                                    )
-                                conn.commit()
-                    return {
-                        "command": command,
-                        "target": target,
-                        "dispatched": True,
-                        "channel": "mqtt",
-                        "query": effective_query,
-                        "song_url": song_url,
-                        "title": song_title,
-                        "cmd_history_id": cmd_history_id,
-                    }
-                except Exception as e:
-                    if cmd_history_id:
-                        self._update_command_failed(cmd_history_id, str(e))
-                    # Fall through to regular publish
-
-            try:
-                # Record before publishing for non-SEARCH commands
-                if command != "SEARCH":
-                    cmd_history_id = self._record_command_received(command, "mqtt", target, mqtt)
-                mqtt.publish_command(command, 0.99, now, target=target)
-                if cmd_history_id:
-                    self._update_command_published(cmd_history_id)
-            except TypeError:
-                # Backward compat with Sprint 11 mqtt_service without target kwarg
-                mqtt.publish_command(command, 0.99, now)
-                if cmd_history_id:
-                    self._update_command_published(cmd_history_id)
-            return {"command": command, "target": target, "dispatched": True, "channel": "mqtt", "cmd_history_id": cmd_history_id}
-
-        # target == "desktop" - forward to receiver PC via UART if connected; else execute locally
         try:
-            from .uart_transmitter import uart_transmitter
-        except ImportError:
-            from uart_transmitter import uart_transmitter
-        uart_connected = bool(uart_transmitter and uart_transmitter.enabled and uart_transmitter.is_connected())
-
-        # If UART is connected, forward to receiver PC2 via UART
-        if uart_connected:
-            is_search_cmd = command in (
-                "SEARCH", "Right_Search_Playlist", "Search Album/Playlist",
-                "Search", "RIGHT", "search", "search_album_playlist",
-            )
-            if is_search_cmd:
-                effective_query = (query or "").strip() if (query and str(query).strip()) else "Inaam"
-                try:
+            try:
+                from .uart_transmitter import uart_transmitter
+            except ImportError:
+                from uart_transmitter import uart_transmitter
+            if uart_transmitter and uart_transmitter.enabled:
+                if command in SEARCH_COMMAND_ALIASES:
+                    effective_query = (query or "").strip() if (query and str(query).strip()) else "Inaam"
                     cmd_history_id = self._record_command_received(
-                        command, "uart", "desktop", query=effective_query, song_url=effective_query, title=effective_query
+                        command, "uart", "uart", query=effective_query, song_url=effective_query, title=effective_query
                     )
                     uart_transmitter.send_search(effective_query)
                     if cmd_history_id:
                         self._update_command_published(cmd_history_id)
-                    return {
-                        "command": command,
-                        "target": target,
-                        "dispatched": True,
-                        "channel": "uart",
-                        "query": effective_query,
-                        "result": f"UART forwarded: search|{effective_query}",
-                        "cmd_history_id": cmd_history_id,
-                    }
-                except Exception as e:
-                    if cmd_history_id:
-                        self._update_command_failed(cmd_history_id, f"UART search forward failed: {e}")
-                    return {
-                        "command": command,
-                        "target": target,
-                        "dispatched": False,
-                        "reason": f"UART search forward failed: {e}",
-                    }
+                    return {"command": command, "target": "uart", "dispatched": True, "channel": "uart", "query": effective_query, "cmd_history_id": cmd_history_id}
+                cmd_history_id = self._record_command_received(command, "uart", "uart")
+                uart_transmitter.send_action(command)
+                if cmd_history_id:
+                    self._update_command_published(cmd_history_id)
+                return {"command": command, "target": "uart", "dispatched": True, "channel": "uart", "cmd_history_id": cmd_history_id}
+            return {"command": command, "target": "uart", "dispatched": False, "reason": "UART disabled"}
+        except Exception as e:
+            if cmd_history_id:
+                self._update_command_failed(cmd_history_id, str(e))
+            return {"command": command, "target": "uart", "dispatched": False, "reason": str(e)}
 
-            # Regular desktop command forwarded via UART
-            cmd_history_id = self._record_command_received(command, "uart", "desktop")
-            uart_transmitter.send_action(command)
+    def _route_mobile(self, command, target, query):
+        mqtt = device_manager.get_mobile().get("mqtt_service")
+        if mqtt is None:
             return {
                 "command": command,
                 "target": target,
-                "dispatched": True,
-                "channel": "uart",
-                "result": f"UART forwarded: {command}",
-                "cmd_history_id": cmd_history_id,
+                "dispatched": False,
+                "reason": "mobile backend not registered",
+            }
+        client = getattr(mqtt, "client", None)
+        if client is None or not client.is_connected():
+            return {
+                "command": command,
+                "target": target,
+                "dispatched": False,
+                "reason": "MQTT not connected (broker unreachable) - APK will not receive the command",
             }
 
-        # Local desktop fallback when UART/COM is not connected
+        now = time.time()
+        if command == "Right_Play_Pause":
+            if self._last_mobile_publish["command"] == command and (now - self._last_mobile_publish["ts"]) < 1.0:
+                return {
+                    "command": command,
+                    "target": target,
+                    "dispatched": True,
+                    "channel": "mqtt",
+                    "reason": "duplicate play/pause suppressed within 1s (single action only)",
+                }
+            self._last_mobile_publish = {"command": command, "ts": now}
+
+        if command in SEARCH_COMMAND_ALIASES:
+            effective_query = (query or "").strip() if (query and str(query).strip()) else "Inaam"
+            cmd_history_id = None
+            try:
+                cmd_history_id = self._record_command_received(
+                    command, "mqtt", target, mqtt, query=effective_query
+                )
+                search_res = mqtt.publish_search_command(effective_query, target=target)
+                song_url = (search_res or {}).get("song_url", "")
+                song_title = (search_res or {}).get("title", effective_query)
+                if cmd_history_id:
+                    pg = self._get_pg_store()
+                    if pg:
+                        with pg._get_connection() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    "UPDATE command_history SET song_url = %s, title = %s, status = 'published', updated_at = NOW() WHERE id = %s",
+                                    (song_url, song_title, cmd_history_id),
+                                )
+                            conn.commit()
+                return {
+                    "command": command,
+                    "target": target,
+                    "dispatched": True,
+                    "channel": "mqtt",
+                    "query": effective_query,
+                    "song_url": song_url,
+                    "title": song_title,
+                    "cmd_history_id": cmd_history_id,
+                }
+            except Exception as e:
+                if cmd_history_id:
+                    self._update_command_failed(cmd_history_id, str(e))
+
+        cmd_history_id = None
+        try:
+            if command != "SEARCH":
+                cmd_history_id = self._record_command_received(command, "mqtt", target, mqtt)
+            mqtt.publish_command(command, 0.99, now, target=target)
+            if cmd_history_id:
+                self._update_command_published(cmd_history_id)
+        except TypeError:
+            mqtt.publish_command(command, 0.99, now)
+            if cmd_history_id:
+                self._update_command_published(cmd_history_id)
+        return {"command": command, "target": target, "dispatched": True, "channel": "mqtt", "cmd_history_id": cmd_history_id}
+
+    def _route_desktop_uart(self, command, query, target, uart_transmitter):
+        if command in SEARCH_COMMAND_ALIASES:
+            effective_query = (query or "").strip() if (query and str(query).strip()) else "Inaam"
+            cmd_history_id = None
+            try:
+                cmd_history_id = self._record_command_received(
+                    command, "uart", "desktop", query=effective_query, song_url=effective_query, title=effective_query
+                )
+                uart_transmitter.send_search(effective_query)
+                if cmd_history_id:
+                    self._update_command_published(cmd_history_id)
+                return {
+                    "command": command,
+                    "target": target,
+                    "dispatched": True,
+                    "channel": "uart",
+                    "query": effective_query,
+                    "result": f"UART forwarded: search|{effective_query}",
+                    "cmd_history_id": cmd_history_id,
+                }
+            except Exception as e:
+                if cmd_history_id:
+                    self._update_command_failed(cmd_history_id, f"UART search forward failed: {e}")
+                return {
+                    "command": command,
+                    "target": target,
+                    "dispatched": False,
+                    "reason": f"UART search forward failed: {e}",
+                }
+
+        cmd_history_id = self._record_command_received(command, "uart", "desktop")
+        uart_transmitter.send_action(command)
+        return {
+            "command": command,
+            "target": target,
+            "dispatched": True,
+            "channel": "uart",
+            "result": f"UART forwarded: {command}",
+            "cmd_history_id": cmd_history_id,
+        }
+
+    def _route_desktop_local(self, command, query, target):
         controller = device_manager.get_desktop().get("controller")
         if controller is None:
             return {
@@ -344,6 +315,27 @@ class CommandRouter:
                 "dispatched": False,
                 "reason": f"Local desktop execution error: {e}",
             }
+
+    def _route_desktop(self, command, query, target):
+        try:
+            from .uart_transmitter import uart_transmitter
+        except ImportError:
+            from uart_transmitter import uart_transmitter
+
+        uart_connected = bool(uart_transmitter and uart_transmitter.enabled and uart_transmitter.is_connected())
+        if uart_connected:
+            return self._route_desktop_uart(command, query, target, uart_transmitter)
+        return self._route_desktop_local(command, query, target)
+
+    def route(self, command, target="mobile", query=None):
+        if target not in ("mobile", "desktop", "ios", "uart"):
+            raise ValueError(f"Unknown target: {target} (expected 'mobile', 'desktop', 'ios', or 'uart')")
+
+        if target == "uart":
+            return self._route_uart(command, query)
+        if target in ("mobile", "ios"):
+            return self._route_mobile(command, target, query)
+        return self._route_desktop(command, query, target)
 
     def route_multi(self, command, targets=("mobile", "desktop")):
         """Future-proof multi-target dispatch. ``'both'`` is not supported yet."""

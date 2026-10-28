@@ -1,4 +1,4 @@
-﻿"""
+"""
 SynaptiMesh Sync API Client.
 ============================
 Provides an HTTP client for the SynaptiMesh Sync API microservice running on AWS EC2
@@ -25,22 +25,26 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+def _parse_env_file(path: Path):
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip("'").strip('"')
+                if k not in os.environ:
+                    os.environ[k] = v
+    except Exception:
+        pass
+
+
 def _load_env_fallback():
     _curr = Path(__file__).resolve().parent
     for _ in range(5):
         _env = _curr / ".env"
         if _env.is_file():
-            try:
-                for line in _env.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        k = k.strip()
-                        v = v.strip().strip("'").strip('"')
-                        if k not in os.environ:
-                            os.environ[k] = v
-            except Exception:
-                pass
+            _parse_env_file(_env)
             break
         _curr = _curr.parent
 
@@ -75,8 +79,46 @@ SYNC_MAX_RETRIES = int(os.environ.get("SYNC_MAX_RETRIES", 2))
 # ==============================================================================
 # Automatic Native Tunnel Manager (Zero PowerShell Needed)
 # ==============================================================================
+HEADER_APPLICATION_JSON = "application/json"
 _auto_tunnel_proc: Optional[subprocess.Popen] = None
 _auto_tunnel_lock = threading.Lock()
+
+
+def _probe_sync_api_health() -> bool:
+    try:
+        r = requests.get(f"{SYNC_API_BASE_URL}/health", timeout=1.0)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _reset_tunnel_process():
+    global _auto_tunnel_proc
+    if _auto_tunnel_proc is None:
+        return
+    if _auto_tunnel_proc.poll() is not None:
+        _auto_tunnel_proc = None
+    else:
+        try:
+            _auto_tunnel_proc.terminate()
+            _auto_tunnel_proc.wait(timeout=1.0)
+        except Exception:
+            pass
+        _auto_tunnel_proc = None
+
+
+def _wait_for_tunnel_ready(proc: subprocess.Popen) -> bool:
+    for _ in range(10):
+        time.sleep(0.5)
+        if proc.poll() is not None:
+            err_msg = proc.stderr.read().strip() if proc.stderr else "Unknown error"
+            logger.warning(f"[NATIVE-TUNNEL] SSH tunnel exited immediately (code {proc.returncode}): {err_msg}")
+            return False
+        if _probe_sync_api_health():
+            logger.info("[NATIVE-TUNNEL] Database bridge connected successfully from Python.")
+            return True
+    return False
+
 
 def ensure_sync_tunnel() -> bool:
     """Ensure the connection to the Sync API is alive.
@@ -84,47 +126,24 @@ def ensure_sync_tunnel() -> bool:
     in the background natively without requiring external PowerShell scripts.
     """
     global _auto_tunnel_proc
-    # 1. Quick probe to see if already alive
-    try:
-        r = requests.get(f"{SYNC_API_BASE_URL}/health", timeout=1.0)
-        if r.status_code == 200:
-            return True
-    except Exception:
-        pass
+    if _probe_sync_api_health():
+        return True
 
-    # 2. Only attempt auto-bridge if configured for local loopback (dev mode)
+    # Only attempt auto-bridge if configured for local loopback (dev mode)
     if "127.0.0.1" not in SYNC_API_BASE_URL and "localhost" not in SYNC_API_BASE_URL:
-        # In production with HTTPS domain (e.g. https://api.synaptimesh.com), no tunnel is needed
         return False
 
     with _auto_tunnel_lock:
-        # Double check after acquiring lock
-        try:
-            r = requests.get(f"{SYNC_API_BASE_URL}/health", timeout=1.0)
-            if r.status_code == 200:
-                return True
-        except Exception:
-            pass
+        if _probe_sync_api_health():
+            return True
 
-        # If previous tunnel process died or exited, clean it up
-        if _auto_tunnel_proc is not None:
-            if _auto_tunnel_proc.poll() is not None:
-                _auto_tunnel_proc = None
-            else:
-                # Process is alive but not answering on /health - terminate and respawn
-                try:
-                    _auto_tunnel_proc.terminate()
-                    _auto_tunnel_proc.wait(timeout=1.0)
-                except Exception:
-                    pass
-                _auto_tunnel_proc = None
+        _reset_tunnel_process()
 
         key_path = Path.home() / ".ssh" / "synapti-test"
         if not key_path.exists():
             logger.warning(f"[NATIVE-TUNNEL] SSH key not found at {key_path}")
             return False
 
-        # Extract local port from SYNC_API_BASE_URL (defaults to 8001)
         local_port = "8001"
         if ":" in SYNC_API_BASE_URL:
             try:
@@ -157,25 +176,9 @@ def ensure_sync_tunnel() -> bool:
                 text=True
             )
 
-            # Wait up to 5 seconds for health response
-            for _ in range(10):
-                time.sleep(0.5)
-                # Check if ssh exited prematurely with error
-                if _auto_tunnel_proc.poll() is not None:
-                    err_msg = _auto_tunnel_proc.stderr.read().strip() if _auto_tunnel_proc.stderr else "Unknown error"
-                    logger.warning(f"[NATIVE-TUNNEL] SSH tunnel exited immediately (code {_auto_tunnel_proc.returncode}): {err_msg}")
-                    _auto_tunnel_proc = None
-                    return False
+            if _wait_for_tunnel_ready(_auto_tunnel_proc):
+                return True
 
-                try:
-                    r = requests.get(f"{SYNC_API_BASE_URL}/health", timeout=1.0)
-                    if r.status_code == 200:
-                        logger.info("[NATIVE-TUNNEL] Database bridge connected successfully from Python.")
-                        return True
-                except Exception:
-                    pass
-
-            # If still not responding, check stderr
             if _auto_tunnel_proc and _auto_tunnel_proc.poll() is not None:
                 err_msg = _auto_tunnel_proc.stderr.read().strip() if _auto_tunnel_proc.stderr else ""
                 logger.warning(f"[NATIVE-TUNNEL] SSH tunnel failed: {err_msg}")
@@ -183,8 +186,8 @@ def ensure_sync_tunnel() -> bool:
             else:
                 logger.warning("[NATIVE-TUNNEL] Bridge started but /health not responding yet.")
             return False
-        except Exception as e:
-            logger.error(f"[NATIVE-TUNNEL] Failed to start bridge from Python: {e}")
+        except Exception:
+            logger.exception("[NATIVE-TUNNEL] Failed to start bridge from Python:")
             return False
 
 def _cleanup_auto_tunnel():
@@ -230,12 +233,27 @@ class SyncAPIClient:
     def _get_headers(self) -> Dict[str, str]:
         key = os.environ.get("SYNC_API_KEY", SYNC_API_KEY).strip()
         headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Content-Type": HEADER_APPLICATION_JSON,
+            "Accept": HEADER_APPLICATION_JSON,
         }
         if key:
             headers["X-API-Key"] = key
         return headers
+
+    def _drain_queue(self):
+        while not self._work_queue.empty():
+            try:
+                rem = self._work_queue.get_nowait()
+                if rem is not None:
+                    func, args, kwargs = rem
+                    try:
+                        func(*args, **kwargs)
+                    except Exception as e:
+                        logger.warning(f"[SYNC API WORKER] Error draining task {func.__name__}: {e}")
+                    finally:
+                        self._work_queue.task_done()
+            except Exception:
+                break
 
     def _worker_loop(self):
         """Dedicated worker loop that drains tasks and terminates cleanly upon shutdown."""
@@ -248,20 +266,7 @@ class SyncAPIClient:
                 continue
 
             if task is None:
-                # Sentinel received: drain remaining tasks
-                while not self._work_queue.empty():
-                    try:
-                        rem = self._work_queue.get_nowait()
-                        if rem is not None:
-                            func, args, kwargs = rem
-                            try:
-                                func(*args, **kwargs)
-                            except Exception as e:
-                                logger.warning(f"[SYNC API WORKER] Error draining task {func.__name__}: {e}")
-                            finally:
-                                self._work_queue.task_done()
-                    except Exception:
-                        break
+                self._drain_queue()
                 self._work_queue.task_done()
                 break
 
@@ -313,7 +318,7 @@ def health_check() -> Dict[str, Any]:
         return {
             "status": "ok" if resp.status_code == 200 else "error",
             "status_code": resp.status_code,
-            "response": resp.json() if "application/json" in resp.headers.get("Content-Type", "") else resp.text,
+            "response": resp.json() if HEADER_APPLICATION_JSON in resp.headers.get("Content-Type", "") else resp.text,
         }
     except requests.exceptions.ConnectionError:
         return {
@@ -322,6 +327,19 @@ def health_check() -> Dict[str, Any]:
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+def _handle_register_response(resp, username: str, device_id: str) -> Optional[Dict[str, Any]]:
+    if resp.status_code in (200, 201):
+        logger.info(f"[SYNC API] Device '{username}' registered successfully.")
+        return resp.json() if resp.content else {"status": "registered", "device_id": device_id}
+    if resp.status_code == 409:
+        logger.warning(f"[SYNC API 409] Conflict: Username '{username}' already in use by another device.")
+        return {"status": "conflict", "error": "Username already taken", "status_code": 409}
+    if resp.status_code == 401:
+        logger.error("[SYNC API 401] Unauthorized: Invalid SYNC_API_KEY.")
+        return {"status": "error", "error": "Unauthorized", "status_code": 401}
+    return None
 
 
 def register_device(device_id: str, username: str, device_type: str = "android") -> Dict[str, Any]:
@@ -341,21 +359,14 @@ def register_device(device_id: str, username: str, device_type: str = "android")
     for attempt in range(1 + SYNC_MAX_RETRIES):
         try:
             resp = client.session.post(url, json=payload, headers=headers, timeout=SYNC_API_TIMEOUT)
-            if resp.status_code in (200, 201):
-                logger.info(f"[SYNC API] Device '{username}' registered successfully.")
-                return resp.json() if resp.content else {"status": "registered", "device_id": device_id}
-            elif resp.status_code == 409:
-                logger.warning(f"[SYNC API 409] Conflict: Username '{username}' already in use by another device.")
-                return {"status": "conflict", "error": "Username already taken", "status_code": 409}
-            elif resp.status_code == 401:
-                logger.error("[SYNC API 401] Unauthorized: Invalid SYNC_API_KEY.")
-                return {"status": "error", "error": "Unauthorized", "status_code": 401}
-            elif resp.status_code >= 500 and attempt < SYNC_MAX_RETRIES:
+            result = _handle_register_response(resp, username, device_id)
+            if result is not None:
+                return result
+            if resp.status_code >= 500 and attempt < SYNC_MAX_RETRIES:
                 time.sleep(0.5 * (2 ** attempt))
                 continue
-            else:
-                logger.error(f"[SYNC API] Failed device registration ({resp.status_code}): {resp.text}")
-                return {"status": "error", "status_code": resp.status_code, "detail": resp.text}
+            logger.error(f"[SYNC API] Failed device registration ({resp.status_code}): {resp.text}")
+            return {"status": "error", "status_code": resp.status_code, "detail": resp.text}
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             if attempt < SYNC_MAX_RETRIES:
                 ensure_sync_tunnel()
@@ -363,9 +374,9 @@ def register_device(device_id: str, username: str, device_type: str = "android")
                 continue
             logger.warning(f"[SYNC API] Cannot register device after retries (tunnel offline?): {e}")
             return {"status": "offline", "error": str(e)}
-        except Exception as e:
-            logger.error(f"[SYNC API] Unexpected error in register_device: {e}")
-            return {"status": "error", "error": str(e)}
+        except Exception:
+            logger.exception("[SYNC API] Unexpected error in register_device:")
+            return {"status": "error", "error": "Unexpected error"}
 
 
 def get_device(device_id: str) -> Optional[Dict[str, Any]]:
@@ -376,8 +387,8 @@ def get_device(device_id: str) -> Optional[Dict[str, Any]]:
     try:
         resp = client.session.get(url, headers=headers, timeout=SYNC_API_TIMEOUT)
         return resp.json() if resp.status_code == 200 else None
-    except Exception as e:
-        logger.error(f"[SYNC API] Error fetching device {device_id}: {e}")
+    except Exception:
+        logger.exception(f"[SYNC API] Error fetching device {device_id}:")
         return None
 
 
@@ -389,9 +400,22 @@ def get_device_by_username(username: str) -> Optional[Dict[str, Any]]:
     try:
         resp = client.session.get(url, headers=headers, timeout=SYNC_API_TIMEOUT)
         return resp.json() if resp.status_code == 200 else None
-    except Exception as e:
-        logger.error(f"[SYNC API] Error fetching username {username}: {e}")
+    except Exception:
+        logger.exception(f"[SYNC API] Error fetching username {username}:")
         return None
+
+
+def _handle_send_event_response(resp, event_id: str) -> Optional[Dict[str, Any]]:
+    if resp.status_code in (200, 201):
+        logger.info(f"[SYNC API] Event stored successfully (ID={event_id[:8]}...)")
+        return {"status": "stored", "event_id": event_id, "data": resp.json() if resp.content else {}}
+    if resp.status_code == 409 or "already_exists" in resp.text:
+        logger.warning(f"[SYNC API] Duplicate event_id {event_id} already exists.")
+        return {"status": "already_exists", "event_id": event_id}
+    if resp.status_code == 401:
+        logger.error("[SYNC API 401] Unauthorized. Check SYNC_API_KEY.")
+        return {"status": "error", "error": "Unauthorized", "status_code": 401}
+    return None
 
 
 def send_event(
@@ -427,21 +451,14 @@ def send_event(
     for attempt in range(1 + SYNC_MAX_RETRIES):
         try:
             resp = client.session.post(url, json=event_payload, headers=headers, timeout=SYNC_API_TIMEOUT)
-            if resp.status_code in (200, 201):
-                logger.info(f"[SYNC API] Event stored successfully (ID={event_id[:8]}...)")
-                return {"status": "stored", "event_id": event_id, "data": resp.json() if resp.content else {}}
-            elif resp.status_code == 409 or "already_exists" in resp.text:
-                logger.warning(f"[SYNC API] Duplicate event_id {event_id} already exists.")
-                return {"status": "already_exists", "event_id": event_id}
-            elif resp.status_code == 401:
-                logger.error("[SYNC API 401] Unauthorized. Check SYNC_API_KEY.")
-                return {"status": "error", "error": "Unauthorized", "status_code": 401}
-            elif resp.status_code >= 500 and attempt < SYNC_MAX_RETRIES:
+            result = _handle_send_event_response(resp, event_id)
+            if result is not None:
+                return result
+            if resp.status_code >= 500 and attempt < SYNC_MAX_RETRIES:
                 time.sleep(0.5 * (2 ** attempt))
                 continue
-            else:
-                logger.error(f"[SYNC API] Failed with status {resp.status_code}: {resp.text}")
-                return {"status": "error", "status_code": resp.status_code, "detail": resp.text}
+            logger.error(f"[SYNC API] Failed with status {resp.status_code}: {resp.text}")
+            return {"status": "error", "status_code": resp.status_code, "detail": resp.text}
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
             if attempt < SYNC_MAX_RETRIES:
                 ensure_sync_tunnel()
@@ -449,9 +466,9 @@ def send_event(
                 continue
             logger.warning(f"[SYNC API] Connection error sending event {event_id} after retries: {e}")
             return {"status": "offline", "message": str(e), "event_id": event_id}
-        except Exception as e:
-            logger.error(f"[SYNC API] Unexpected error sending event {event_id}: {e}")
-            return {"status": "error", "message": str(e), "event_id": event_id}
+        except Exception:
+            logger.exception(f"[SYNC API] Unexpected error sending event {event_id}:")
+            return {"status": "error", "message": "Unexpected error", "event_id": event_id}
 
 
 def send_inference_event(
@@ -499,8 +516,8 @@ def get_all_devices() -> List[Dict[str, Any]]:
             data = resp.json()
             return data.get("devices", [])
         return []
-    except Exception as e:
-        logger.error(f"[SYNC API] Error fetching devices: {e}")
+    except Exception:
+        logger.exception("[SYNC API] Error fetching devices:")
         return []
 
 
@@ -511,8 +528,8 @@ def delete_device(device_id: str) -> bool:
     try:
         resp = client.session.delete(url, headers=client._get_headers(), timeout=SYNC_API_TIMEOUT)
         return resp.status_code == 200
-    except Exception as e:
-        logger.error(f"[SYNC API] Error deleting device {device_id}: {e}")
+    except Exception:
+        logger.exception(f"[SYNC API] Error deleting device {device_id}:")
         return False
 
 def get_events(device_id: Optional[str] = None, kind: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
@@ -532,8 +549,8 @@ def get_events(device_id: Optional[str] = None, kind: Optional[str] = None, limi
             data = resp.json()
             return data if isinstance(data, list) else data.get("events", [])
         return []
-    except Exception as e:
-        logger.error(f"[SYNC API] Error fetching events: {e}")
+    except Exception:
+        logger.exception("[SYNC API] Error fetching events:")
         return []
 
 

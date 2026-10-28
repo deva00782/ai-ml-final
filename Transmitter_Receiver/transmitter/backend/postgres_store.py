@@ -61,17 +61,16 @@ class PostgresStore:
         device_id: str,
         username: str,
         device_type: str = "android",
-        is_active: bool = True,
     ) -> bool:
         """Insert or update a device in AWS RDS PostgreSQL."""
         res = db_service.upsert_device(device_id, username, device_type)
         return res is not None
 
-    def update_device_heartbeat(self, device_id: str) -> bool:
+    def update_device_heartbeat(self, *args, **kwargs) -> bool:
         """Heartbeat no-op (aiml schema has no heartbeat column)."""
         return True
 
-    def set_device_active(self, device_id: str, is_active: bool) -> bool:
+    def set_device_active(self, *args, **kwargs) -> bool:
         """Active status no-op (handled in-memory / MQTT)."""
         return True
 
@@ -116,18 +115,23 @@ class PostgresStore:
         return []
 
     def log_startup(self, version: str = "1.0", *args, **kwargs):
+        # No-op: aiml schema does not track startup events
         pass
 
     def log_shutdown(self, *args, **kwargs):
+        # No-op: aiml schema does not track shutdown events
         pass
 
     def log_system_event(self, *args, **kwargs):
+        # No-op: system events are logged via boxed logger
         pass
 
     def _log_system_event(self, *args, **kwargs):
+        # No-op: internal system event logging is disabled
         pass
 
-    def log_device_register(self, device_id: str, username: str, device_type: str, *args, **kwargs):
+    def log_device_register(self, *args, **kwargs):
+        # No-op: device registration is tracked via upsert_device
         pass
 
 

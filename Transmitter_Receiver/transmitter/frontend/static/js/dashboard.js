@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   function tick() {
     const el = document.getElementById("utcClock");
     if (el) el.textContent = new Date().toISOString().slice(11, 19) + " UTC";
@@ -226,7 +226,7 @@
     btn.addEventListener("click", function () {
       const cmd = btn.dataset.raw;
       const text = btn.textContent || "";
-      if (cmd === "RIGHT" && text.indexOf("Search") !== -1) {
+      if (cmd === "RIGHT" && text.includes("Search")) {
         const panel = document.getElementById("searchCommandPanel");
         if (panel) {
           const isHidden = panel.style.display === "none" || !panel.style.display;
@@ -656,9 +656,9 @@
     }
     // Auto-detect target from FSM state (mobile/desktop only; Sprint 11 has no ios FSM state)
     let target = "desktop";
-    const curTgt = (currentTargetEl && currentTargetEl.textContent) || "";
-    const curSt = (currentStateEl && currentStateEl.textContent) || "";
-    if (curTgt.toLowerCase().indexOf("mobile") !== -1 || curSt.indexOf("MOBILE") !== -1) {
+    const curTgt = currentTargetEl?.textContent || "";
+    const curSt = currentStateEl?.textContent || "";
+    if (curTgt.toLowerCase().includes("mobile") || curSt.includes("MOBILE")) {
       target = "mobile";
     } else {
       target = "desktop";
@@ -738,8 +738,8 @@
     const filtered = allUsernames.filter(function (usr) {
       if (!filterText) return true;
       const dev = cachedDevices[usr];
-      const devType = (dev && dev.device_type ? dev.device_type : "").toLowerCase();
-      return usr.toLowerCase().indexOf(filterText) !== -1 || devType.indexOf(filterText) !== -1;
+      const devType = (dev?.device_type || "").toLowerCase();
+      return usr.toLowerCase().includes(filterText) || devType.includes(filterText);
     });
     if (deviceCountBadge) {
       deviceCountBadge.textContent = allUsernames.length;
@@ -763,7 +763,7 @@
       const left = document.createElement("div");
       left.className = "device-item-left";
       const icon = document.createElement("span");
-      icon.textContent = isIos ? "\u{1F4F1}" : "\u{1F4F1}";
+      icon.textContent = "\u{1F4F1}";
       const name = document.createElement("span");
       name.className = "device-item-name";
       name.textContent = usr;
@@ -848,6 +848,26 @@
       });
   }
 
+  function mergePgDevices(pgData) {
+    const pgDevices = pgData?.devices || [];
+    let changed = false;
+    pgDevices.forEach(function (d) {
+      if (d?.username && !cachedDevices[d.username]) {
+        cachedDevices[d.username] = {
+          username: d.username,
+          device_type: d.device_type || "android",
+          device_id: d.device_id,
+          is_active: d.is_active,
+          last_seen_at: d.last_seen_at,
+        };
+        changed = true;
+      }
+    });
+    if (changed) {
+      renderDeviceList(deviceSearchInput ? deviceSearchInput.value : "");
+    }
+  }
+
   function refreshMobileDevices() {
     // 1. Query in-memory MQTT device registry first (instant <1ms response)
     fetch("/api/mobile/devices")
@@ -858,7 +878,7 @@
         cachedDevices = {};
 
         mqttDevices.forEach(function (d) {
-          if (d && d.username) {
+          if (d?.username) {
             cachedDevices[d.username] = {
               username: d.username,
               device_type: d.device_type || "android",
@@ -877,25 +897,7 @@
         // 2. Optionally enrich with persistent PostgreSQL records in the background without blocking UI
         fetch("/api/devices")
           .then(function (r) { return r.json(); })
-          .then(function (pgData) {
-            const pgDevices = pgData.devices || [];
-            let changed = false;
-            pgDevices.forEach(function (d) {
-              if (d && d.username && !cachedDevices[d.username]) {
-                cachedDevices[d.username] = {
-                  username: d.username,
-                  device_type: d.device_type || "android",
-                  device_id: d.device_id,
-                  is_active: d.is_active,
-                  last_seen_at: d.last_seen_at,
-                };
-                changed = true;
-              }
-            });
-            if (changed) {
-              renderDeviceList(deviceSearchInput ? deviceSearchInput.value : "");
-            }
-          })
+          .then(mergePgDevices)
           .catch(function () {
             // PostgreSQL offline; in-memory devices already displayed
           });
@@ -983,10 +985,66 @@
     });
   }
 
-  if (devicePickerBtn) {
+  function handleDeviceRegistered(data) {
+    if (data?.username) {
+      cachedDevices[data.username] = {
+        username: data.username,
+        device_type: data.device_type || "android",
+        device_id: data.device_id
+      };
+      if (!currentActiveDevice || currentActiveDevice === "none") {
+        updateActiveDeviceDisplay(data.username, data.device_type || "android");
+      }
+      renderDeviceList(deviceSearchInput ? deviceSearchInput.value : "");
+      log("New device connected: " + data.username + " [" + (data.device_type || "android").toUpperCase() + "]");
+    }
+    refreshMobileDevices();
+  }
+
+  function handleActiveDeviceChanged(data) {
+    if (data?.active_device !== undefined) {
+      const dev = cachedDevices[data.active_device] || null;
+      updateActiveDeviceDisplay(data.active_device, dev ? dev.device_type : "none");
+      renderDeviceList(deviceSearchInput ? deviceSearchInput.value : "");
+    }
+  }
+
+  function handleMobileDevicesUpdated(data) {
+    if (data?.devices) {
+      cachedDevices = {};
+      data.devices.forEach(function (d) {
+        if (d?.username) {
+          cachedDevices[d.username] = d;
+        }
+      });
+      if (data.active_device !== undefined) {
+        const activeInfo = cachedDevices[data.active_device] || null;
+        updateActiveDeviceDisplay(data.active_device, activeInfo ? activeInfo.device_type : "none");
+      }
+      renderDeviceList(deviceSearchInput ? deviceSearchInput.value : "");
+    } else {
+      refreshMobileDevices();
+    }
+  }
+
+  function setupDeviceSocketListeners(sock) {
+    if (sock === undefined || !sock) return;
+    sock.on("mobile_device_registered", handleDeviceRegistered);
+    sock.on("active_mobile_device_changed", handleActiveDeviceChanged);
+    sock.on("mobile_devices_updated", handleMobileDevicesUpdated);
+    sock.on("mobile_devices_cleared", function () {
+      cachedDevices = {};
+      currentActiveDevice = "";
+      updateActiveDeviceDisplay("", "none");
+      renderDeviceList("");
+    });
+  }
+
+  function initDevicePicker() {
+    if (!devicePickerBtn) return;
     devicePickerBtn.addEventListener("click", function (e) {
       e.stopPropagation();
-      const isHidden = devicePickerDropdown && devicePickerDropdown.style.display === "none";
+      const isHidden = devicePickerDropdown?.style.display === "none";
       if (isHidden) {
         openDeviceDropdown();
       } else {
@@ -1014,52 +1072,8 @@
     });
     refreshMobileDevices();
     setInterval(refreshMobileDevices, 10000);
-    if (typeof socket !== "undefined" && socket) {
-      socket.on("mobile_device_registered", function (data) {
-        if (data && data.username) {
-          cachedDevices[data.username] = {
-            username: data.username,
-            device_type: data.device_type || "android",
-            device_id: data.device_id
-          };
-          if (!currentActiveDevice || currentActiveDevice === "none") {
-            updateActiveDeviceDisplay(data.username, data.device_type || "android");
-          }
-          renderDeviceList(deviceSearchInput ? deviceSearchInput.value : "");
-          log("New device connected: " + data.username + " [" + (data.device_type || "android").toUpperCase() + "]");
-        }
-        refreshMobileDevices();
-      });
-      socket.on("active_mobile_device_changed", function (data) {
-        if (data && data.active_device !== undefined) {
-          const dev = cachedDevices[data.active_device] || null;
-          updateActiveDeviceDisplay(data.active_device, dev ? dev.device_type : "none");
-          renderDeviceList(deviceSearchInput ? deviceSearchInput.value : "");
-        }
-      });
-      socket.on("mobile_devices_updated", function (data) {
-        if (data && data.devices) {
-          cachedDevices = {};
-          data.devices.forEach(function (d) {
-            if (d && d.username) {
-              cachedDevices[d.username] = d;
-            }
-          });
-          if (data.active_device !== undefined) {
-            const activeInfo = cachedDevices[data.active_device] || null;
-            updateActiveDeviceDisplay(data.active_device, activeInfo ? activeInfo.device_type : "none");
-          }
-          renderDeviceList(deviceSearchInput ? deviceSearchInput.value : "");
-        } else {
-          refreshMobileDevices();
-        }
-      });
-      socket.on("mobile_devices_cleared", function () {
-        cachedDevices = {};
-        currentActiveDevice = "";
-        updateActiveDeviceDisplay("", "none");
-        renderDeviceList("");
-      });
-    }
+    setupDeviceSocketListeners(socket);
   }
+
+  initDevicePicker();
 })();

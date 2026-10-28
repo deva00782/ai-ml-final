@@ -565,61 +565,86 @@ def fsm_back():
         result={"action":"back_to_level_2","new_state":SUB_MASTER_DASHBOARD,"message":"Returned to Level 2 (Unified back)"}
     _emit_state()
     return jsonify({"status":"success","result":result,"fsm":fsm_controller.get_state()})
+ERR_MOBILE_UNAVAILABLE = "Mobile backend not available"
+
+_MANUAL_MOBILE_MAP = {
+    "Play / Pause": "Right_Play_Pause", "Next Track": "Right_Next_Song",
+    "Previous Track": "Right_Previous_Song", "Volume Up": "Right_Volume_Up",
+    "Volume Down": "Right_Volume_Down", "Search Album/Playlist": "Right_Search_Playlist",
+    "Search": "Right_Search_Playlist", "LEFT": "Right_Play_Pause",
+    "PUSH": "Right_Next_Song", "PULL": "Right_Previous_Song",
+    "RIGHT+PUSH": "Right_Volume_Up", "RIGHT+PULL": "Right_Volume_Down",
+    "RIGHT": "Right_Search_Playlist", "PUSH+RIGHT": "Right_Close_App",
+    "Back to Level 2": "Right_Close_App", "back_to_level_2": "Right_Close_App",
+    "Right_Close_App": "Right_Close_App", "Close_App": "Right_Close_App",
+    "Close JioSaavn": "Right_Close_App"
+}
+
+
+def _dispatch_mobile_manual_action(action, query, target):
+    from backend.command_router import command_router as cr
+    cmd = _MANUAL_MOBILE_MAP.get(action, action)
+    if cmd in ("SEARCH", "Right_Search_Playlist"):
+        effective_query = (query or "").strip() or "Inaam"
+        return cr.route("SEARCH", target=target, query=effective_query)
+    return cr.route(cmd, target=target, query=query)
+
+
+def _dispatch_desktop_manual_action(action, query):
+    from backend.command_router import command_router as cr
+    is_search_act = action in ("SEARCH", "Right_Search_Playlist", "Search Album/Playlist", "Search", "RIGHT")
+    fallback_query = "Inaam" if is_search_act else query
+    effective_query = (query or "").strip() or fallback_query
+    route_res = cr.route(action, target="desktop", query=effective_query)
+    result = route_res.get("result", route_res.get("reason", "Dispatched"))
+    if desktop_controller:
+        status = desktop_controller.get_status()
+        socketio.emit("status_update", status, namespace=DESKTOP_NAMESPACE)
+    return result
+
 
 @app.route("/api/action", methods=["POST"])
 def handle_manual_action():
     """Manual fallback (mirrors desktop /api/action) - direct dispatch without FSM window."""
-    data=request.json or {}
-    action=data.get("action")
-    query=data.get("query")
-    # Sprint 11 rule retained: desktop NEVER executes locally (UART forwarded).
-    # Sprint 12 additive: explicit target + query support for mobile search panel.
-    target=data.get("target") or fsm_controller.target_device or "desktop"
+    data = request.json or {}
+    action = data.get("action")
+    query = data.get("query")
+    target = data.get("target") or fsm_controller.target_device or "desktop"
     if target not in ("mobile", "desktop", "ios"):
         target = "mobile" if target == "ios" else "desktop"
-    result=None
+
     if target in ("mobile", "ios") and MOBILE_AVAILABLE:
-        from backend.command_router import command_router as cr
-        # Map action to mobile command (Sprint 11 base + Sprint 12 aliases)
-        mobile_map={"Play / Pause":"Right_Play_Pause","Next Track":"Right_Next_Song","Previous Track":"Right_Previous_Song","Volume Up":"Right_Volume_Up","Volume Down":"Right_Volume_Down","Search Album/Playlist":"Right_Search_Playlist","Search":"Right_Search_Playlist","LEFT":"Right_Play_Pause","PUSH":"Right_Next_Song","PULL":"Right_Previous_Song","RIGHT+PUSH":"Right_Volume_Up","RIGHT+PULL":"Right_Volume_Down","RIGHT":"Right_Search_Playlist","PUSH+RIGHT":"Right_Close_App","Back to Level 2":"Right_Close_App","back_to_level_2":"Right_Close_App","Right_Close_App":"Right_Close_App","Close_App":"Right_Close_App","Close JioSaavn":"Right_Close_App"}
-        cmd=mobile_map.get(action, action)
-        if cmd in ("SEARCH", "Right_Search_Playlist"):
-            effective_query = (query or "").strip() or "Inaam"
-            result=cr.route("SEARCH", target=target, query=effective_query)
-        else:
-            result=cr.route(cmd, target=target, query=query)
+        result = _dispatch_mobile_manual_action(action, query, target)
     elif desktop_controller:
-        from backend.command_router import command_router as cr
-        effective_query = (query or "").strip() or ("Inaam" if action in ("SEARCH", "Right_Search_Playlist", "Search Album/Playlist", "Search", "RIGHT") else query)
-        route_res = cr.route(action, target="desktop", query=effective_query)
-        result = route_res.get("result", route_res.get("reason", "Dispatched"))
-        status = desktop_controller.get_status()
-        socketio.emit("status_update", status, namespace=DESKTOP_NAMESPACE)
+        result = _dispatch_desktop_manual_action(action, query)
     else:
-        result="No backend available"
-    return jsonify({"status":"success","message":str(result),"target":target})
+        result = "No backend available"
+    return jsonify({"status": "success", "message": str(result), "target": target})
+
+
+def _handle_mobile_target_search(query, target):
+    from backend.command_router import command_router as cr
+    result = cr.route("SEARCH", target=target, query=query)
+    song_url = result.get("song_url", "") if isinstance(result, dict) else ""
+    song_title = result.get("title", query) if isinstance(result, dict) else query
+    return jsonify({"status": "success", "result": result, "query": query, "title": song_title, "song_url": song_url, "target": target})
+
 
 @app.route("/api/mobile/search", methods=["POST"])
 def handle_mobile_search():
     """Sprint 12 & 14: Dedicated SEARCH endpoint for JioSaavn with dynamic query (default: Inaam)."""
-    data=request.json or {}
-    query=data.get("query")
-    target=data.get("target") or fsm_controller.target_device or "desktop"
+    data = request.json or {}
+    query = data.get("query")
+    target = data.get("target") or fsm_controller.target_device or "desktop"
     if target not in ("mobile", "desktop", "ios"):
         target = "desktop"
-    query=(query or "").strip() or "Inaam"
+    query = (query or "").strip() or "Inaam"
+
     if target in ("mobile", "ios"):
         if MOBILE_AVAILABLE:
-            from backend.command_router import command_router as cr
-            result = cr.route("SEARCH", target=target, query=query)
-            song_url = result.get("song_url", "") if isinstance(result, dict) else ""
-            song_title = result.get("title", query) if isinstance(result, dict) else query
-            return jsonify({"status": "success", "result": result, "query": query, "title": song_title, "song_url": song_url, "target": target})
-        return jsonify({"status": "error", "message": "Mobile backend not available"}), 400
-    # Sprint 11 rule: desktop search is UART-forwarded, not executed locally.
-    # Search fix: forward the typed song name as search|<query> over UART so
-    # the receiver (PC2) searches that exact song. UART needs no desktop
-    # controller, so forward even if the local controller is unavailable.
+            return _handle_mobile_target_search(query, target)
+        return jsonify({"status": "error", "message": ERR_MOBILE_UNAVAILABLE}), 400
+
     from backend.command_router import command_router as cr
     result = cr.route("SEARCH", target="desktop", query=query)
     if DESKTOP_AVAILABLE and desktop_controller:
@@ -629,6 +654,7 @@ def handle_mobile_search():
         except Exception:
             pass
     return jsonify({"status": "success", "result": result, "query": query, "title": query, "target": "desktop"})
+
 
 @app.route("/api/mobile/devices", methods=["GET"])
 def handle_mobile_devices():
@@ -640,11 +666,12 @@ def handle_mobile_devices():
     except Exception:
         return jsonify({"active_device": getattr(mqtt_service, "active_device", "none"), "devices": []})
 
+
 @app.route("/api/mobile/select_device", methods=["POST"])
 def handle_select_mobile_device():
     """Sprint 12: Switches the active mobile device targeted by MQTT commands."""
     if not mqtt_service:
-        return jsonify({"status": "error", "message": "Mobile backend not available"}), 503
+        return jsonify({"status": "error", "message": ERR_MOBILE_UNAVAILABLE}), 503
     data = request.json or {}
     username = data.get("username", "").strip()
     if not username:
@@ -655,6 +682,7 @@ def handle_select_mobile_device():
         return jsonify({"status": "error", "message": str(e)}), 500
     socketio.emit("active_mobile_device_changed", {"active_device": mqtt_service.active_device}, namespace=DASHBOARD_NAMESPACE)
     return jsonify({"status": "success", "active_device": mqtt_service.active_device})
+
 
 @app.route("/api/mobile/delete_device", methods=["POST"])
 def handle_delete_mobile_device():
@@ -679,11 +707,12 @@ def handle_delete_mobile_device():
     socketio.emit("mobile_devices_updated", res or {"devices": []}, namespace=DASHBOARD_NAMESPACE)
     return jsonify({"status": "success", "result": res})
 
+
 @app.route("/api/mobile/clear_devices", methods=["POST"])
 def handle_clear_mobile_devices():
     """Sprint 12: Clears all dynamically registered devices from the device table."""
     if not mqtt_service:
-        return jsonify({"status": "error", "message": "Mobile backend not available"}), 503
+        return jsonify({"status": "error", "message": ERR_MOBILE_UNAVAILABLE}), 503
     try:
         res = mqtt_service.clear_registered_devices()
     except Exception as e:
@@ -806,64 +835,65 @@ except Exception:
     pass
 
 # --- PostgreSQL Device Registry & Command History APIs ---
+ERR_POSTGRES_UNAVAILABLE = "PostgreSQL not available"
+ERR_POSTGRES_NOT_INITIALIZED = "PostgreSQL not initialized"
+
+
+def _format_pg_datetimes(items, keys=("created_at", "updated_at", "last_seen_at", "executed_at")):
+    for item in items:
+        for key in keys:
+            if item.get(key) and hasattr(item[key], "isoformat"):
+                item[key] = item[key].isoformat()
+    return items
+
+
 @app.route("/api/devices", methods=["GET"])
 def handle_devices_list():
     """Get all registered devices from PostgreSQL."""
     if not get_postgres_store:
-        return jsonify({"status": "error", "message": "PostgreSQL not available"}), 503
+        return jsonify({"status": "error", "message": ERR_POSTGRES_UNAVAILABLE}), 503
     pg = get_postgres_store()
     if not pg:
-        return jsonify({"status": "error", "message": "PostgreSQL not initialized"}), 503
-    devices = pg.get_all_devices()
-    # Convert datetime objects to ISO strings for JSON serialization
-    for d in devices:
-        for key in ("created_at", "updated_at", "last_seen_at"):
-            if d.get(key) and hasattr(d[key], "isoformat"):
-                d[key] = d[key].isoformat()
+        return jsonify({"status": "error", "message": ERR_POSTGRES_NOT_INITIALIZED}), 503
+    devices = _format_pg_datetimes(pg.get_all_devices())
     return jsonify({"status": "success", "devices": devices})
+
 
 @app.route("/api/devices/active", methods=["GET"])
 def handle_active_devices():
     """Get only active devices from PostgreSQL."""
     if not get_postgres_store:
-        return jsonify({"status": "error", "message": "PostgreSQL not available"}), 503
+        return jsonify({"status": "error", "message": ERR_POSTGRES_UNAVAILABLE}), 503
     pg = get_postgres_store()
     if not pg:
-        return jsonify({"status": "error", "message": "PostgreSQL not initialized"}), 503
-    devices = pg.get_active_devices()
-    for d in devices:
-        for key in ("created_at", "updated_at", "last_seen_at"):
-            if d.get(key) and hasattr(d[key], "isoformat"):
-                d[key] = d[key].isoformat()
+        return jsonify({"status": "error", "message": ERR_POSTGRES_NOT_INITIALIZED}), 503
+    devices = _format_pg_datetimes(pg.get_active_devices())
     return jsonify({"status": "success", "devices": devices})
+
 
 @app.route("/api/command_history", methods=["GET"])
 def handle_command_history():
     """Get command history from PostgreSQL, optionally filtered by device."""
     if not get_postgres_store:
-        return jsonify({"status": "error", "message": "PostgreSQL not available"}), 503
+        return jsonify({"status": "error", "message": ERR_POSTGRES_UNAVAILABLE}), 503
     pg = get_postgres_store()
     if not pg:
-        return jsonify({"status": "error", "message": "PostgreSQL not initialized"}), 503
+        return jsonify({"status": "error", "message": ERR_POSTGRES_NOT_INITIALIZED}), 503
     target_device = request.args.get("device")
     limit = min(int(request.args.get("limit", 100)), 500)
     offset = int(request.args.get("offset", 0))
-    history = pg.get_command_history(target_device=target_device, limit=limit, offset=offset)
-    for h in history:
-        for key in ("created_at", "updated_at", "executed_at"):
-            if h.get(key) and hasattr(h[key], "isoformat"):
-                h[key] = h[key].isoformat()
+    history = _format_pg_datetimes(pg.get_command_history(target_device=target_device, limit=limit, offset=offset))
     return jsonify({"status": "success", "history": history, "limit": limit, "offset": offset})
+
 
 @app.route("/api/system_events", methods=["GET"])
 def handle_system_events():
     """Get recent system events from PostgreSQL."""
     if not get_postgres_store:
-        return jsonify({"status": "error", "message": "PostgreSQL not available"}), 503
+        return jsonify({"status": "error", "message": ERR_POSTGRES_UNAVAILABLE}), 503
     pg = get_postgres_store()
     if not pg:
-        return jsonify({"status": "error", "message": "PostgreSQL not initialized"}), 503
-    # For now, use a simple query via the store
+        return jsonify({"status": "error", "message": ERR_POSTGRES_NOT_INITIALIZED}), 503
     try:
         with pg._get_connection() as conn:
             with conn.cursor() as cur:
@@ -896,23 +926,26 @@ def handle_system_events():
                     })
                 return jsonify({"status": "success", "events": events})
     except Exception as e:
-        logging.getLogger().error(f"[POSTGRES] system_events query failed: {e}")
+        logging.getLogger().exception(f"[POSTGRES] system_events query failed: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @app.route("/api/postgres/health", methods=["GET"])
 def handle_postgres_health():
     """PostgreSQL health check endpoint."""
     if not get_postgres_store:
-        return jsonify({"healthy": False, "error": "PostgreSQL not available"}), 503
+        return jsonify({"healthy": False, "error": ERR_POSTGRES_UNAVAILABLE}), 503
     pg = get_postgres_store()
     if not pg:
-        return jsonify({"healthy": False, "error": "PostgreSQL not initialized"}), 503
+        return jsonify({"healthy": False, "error": ERR_POSTGRES_NOT_INITIALIZED}), 503
     health = pg.health_check()
     return jsonify({"status": "success", "health": health})
+
 
 @app.route("/favicon.ico", methods=["GET"])
 def favicon():
     return send_from_directory(app.static_folder, "favicon.svg", mimetype="image/svg+xml")
+
 
 def _run_start_chrome_blocking():
     """Deterministic startup: run start_chrome.py synchronously and wait.
@@ -953,9 +986,37 @@ def _run_start_chrome_blocking():
         logger.exception(f"[STARTUP] Failed to invoke start_chrome.py: {e} — continuing Flask startup anyway")
         return False
 
+
+def _init_postgres_on_startup(logger):
+    if not init_postgres:
+        return
+    pg_ok = init_postgres()
+    if pg_ok:
+        logger.info("[POSTGRES] Database connection pool initialized")
+        pg = get_postgres_store()
+        if pg:
+            pg.log_startup("1.0")
+    else:
+        logger.warning("[POSTGRES] Database unavailable - continuing without persistence")
+
+
+def _start_background_services(logger):
+    if MOBILE_AVAILABLE and mqtt_service:
+        logger.info("[UNIFIED] Starting Mobile MQTT service...")
+        if not mqtt_service.client or not mqtt_service.client.is_connected():
+            threading.Thread(target=mqtt_service.connect, daemon=True, name="MQTTService-Connect").start()
+    logger.info("[UNIFIED] Starting Desktop poller...")
+    socketio.start_background_task(desktop_status_poller)
+    logger.info("[UNIFIED] Starting Unified volume poller...")
+    socketio.start_background_task(_volume_poller)
+    if CORTEX_ENABLED and cortex_bridge:
+        logger.info("[UNIFIED] Starting Cortex bridge...")
+        threading.Thread(target=lambda: cortex_bridge.connect(), daemon=True).start()
+
+
 def main():
     boxed_logger.configure_console()
-    logger=logging.getLogger()
+    logger = logging.getLogger()
     boxed_logger.print_box("SYSTEM STARTUP", [
         ("Time", boxed_logger.now_str()),
         ("Component", "TRANSMITTER"),
@@ -964,35 +1025,11 @@ def main():
         ("Log Mode", "Production Structured Logging"),
         ("Log File", boxed_logger.get_log_path()),
     ])
-    # --- Initialize PostgreSQL ---
-    if init_postgres:
-        pg_ok = init_postgres()
-        if pg_ok:
-            logger.info("[POSTGRES] Database connection pool initialized")
-            pg = get_postgres_store()
-            if pg:
-                pg.log_startup("1.0")
-        else:
-            logger.warning("[POSTGRES] Database unavailable - continuing without persistence")
-    # --- Deterministic startup order: Chrome first, then Flask ---
-    # Run synchronously before ANY Flask/server init; start_chrome.py is
-    # idempotent (returns 0 immediately if port 9222 already open), so
-    # double-run with reloader is harmless but ensures parent also shows
-    # chrome-before-server ordering per spec.
+    _init_postgres_on_startup(logger)
     _run_start_chrome_blocking()
-    if not DEBUG_MODE or os.environ.get("WERKZEUG_RUN_MAIN")=="true":
-        if MOBILE_AVAILABLE and mqtt_service:
-            logger.info("[UNIFIED] Starting Mobile MQTT service...")
-            if not mqtt_service.client or not mqtt_service.client.is_connected():
-                threading.Thread(target=mqtt_service.connect, daemon=True, name="MQTTService-Connect").start()
-        logger.info("[UNIFIED] Starting Desktop poller...")
-        socketio.start_background_task(desktop_status_poller)
-        logger.info("[UNIFIED] Starting Unified volume poller...")
-        socketio.start_background_task(_volume_poller)
-        if CORTEX_ENABLED and cortex_bridge:
-            logger.info("[UNIFIED] Starting Cortex bridge...")
-            threading.Thread(target=lambda: cortex_bridge.connect(), daemon=True).start()
-    port=int(os.environ.get("UNIFIED_PORT", os.environ.get("MASTER_HUB_PORT","8000")))
+    if not DEBUG_MODE or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        _start_background_services(logger)
+    port = int(os.environ.get("UNIFIED_PORT", os.environ.get("MASTER_HUB_PORT", "8000")))
     logger.info(f"[UNIFIED] SynaptiMesh Unified Dashboard -> http://localhost:{port}/dashboard")
     try:
         socketio.run(app, host="0.0.0.0", port=port, debug=DEBUG_MODE, allow_unsafe_werkzeug=True)

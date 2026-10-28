@@ -61,6 +61,10 @@ EXCLUDE_NAMES = {
 
 EXCLUDE_PREFIXES = ("Cache",)
 
+EXE_CHROME = "chrome.exe"
+EXE_MSEDGE = "msedge.exe"
+DIR_CONFIG = ".config"
+
 
 def is_port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.5) -> bool:
     try:
@@ -71,91 +75,92 @@ def is_port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.5) -> bo
         return False
 
 
+def _get_chrome_darwin() -> str | None:
+    candidates = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ]
+    for p in candidates:
+        if Path(p).is_file():
+            return p
+    for name in ("google-chrome", "chromium", "chromium-browser"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _get_chrome_linux() -> str | None:
+    for name in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium", "chrome", "chrome-browser"):
+        found = shutil.which(name)
+        if found:
+            return found
+    for p in ("/usr/bin/google-chrome", "/usr/bin/google-chrome-stable",
+              "/usr/bin/chromium-browser", "/usr/bin/chromium",
+              "/snap/bin/chromium", "/snap/bin/google-chrome",
+              "/opt/google/chrome/google-chrome"):
+        if Path(p).is_file():
+            return p
+    try:
+        r = subprocess.run(["flatpak", "list", "--app"], capture_output=True, text=True, timeout=2)
+        if "com.google.Chrome" in r.stdout:
+            return "flatpak run com.google.Chrome"
+    except Exception:
+        pass
+    return None
+
+
+def _get_chrome_windows() -> str | None:
+    candidates: list[str] = []
+    for name in ("chrome", EXE_CHROME, "google-chrome"):
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    pf = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+    pf_x86 = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
+    local_app = os.environ.get("LOCALAPPDATA", "")
+    user_profile = os.environ.get("USERPROFILE", "")
+    candidates.extend([
+        str(Path(pf) / "Google" / "Chrome" / "Application" / EXE_CHROME),
+        str(Path(pf_x86) / "Google" / "Chrome" / "Application" / EXE_CHROME),
+        str(Path(local_app) / "Google" / "Chrome" / "Application" / EXE_CHROME),
+        str(Path(user_profile) / "AppData" / "Local" / "Google" / "Chrome" / "Application" / EXE_CHROME),
+        rf"C:\Program Files\Google\Chrome\Application\{EXE_CHROME}",
+        rf"C:\Program Files (x86)\Google\Chrome\Application\{EXE_CHROME}",
+    ])
+    for p in candidates:
+        if p and Path(p).is_file():
+            return p
+    for p in (
+        str(Path(pf) / "Chromium" / "Application" / EXE_CHROME),
+        str(Path(local_app) / "Chromium" / "Application" / EXE_CHROME),
+        str(Path(pf) / "Microsoft" / "Edge" / "Application" / EXE_MSEDGE),
+        str(Path(pf_x86) / "Microsoft" / "Edge" / "Application" / EXE_MSEDGE),
+        str(Path(local_app) / "Microsoft" / "Edge" / "Application" / EXE_MSEDGE),
+    ):
+        if Path(p).is_file():
+            return p
+    try:
+        r = subprocess.run(["where", "chrome"], capture_output=True, text=True, timeout=2)
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                if Path(line.strip()).is_file():
+                    return line.strip()
+    except Exception:
+        pass
+    return None
+
+
 def get_chrome_binary() -> str | None:
     system = platform.system()
-
     if system == "Darwin":
-        candidates = [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        ]
-        for p in candidates:
-            if Path(p).is_file():
-                return p
-        # fallback to `which`
-        for name in ("google-chrome", "chromium", "chromium-browser"):
-            found = shutil.which(name)
-            if found:
-                return found
-        return None
-
+        return _get_chrome_darwin()
     if system == "Linux":
-        for name in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium", "chrome", "chrome-browser"):
-            found = shutil.which(name)
-            if found:
-                return found
-        # common absolute paths (including snap)
-        for p in ("/usr/bin/google-chrome", "/usr/bin/google-chrome-stable",
-                  "/usr/bin/chromium-browser", "/usr/bin/chromium",
-                  "/snap/bin/chromium", "/snap/bin/google-chrome",
-                  "/opt/google/chrome/google-chrome"):
-            if Path(p).is_file():
-                return p
-        # try flatpak
-        try:
-            r = subprocess.run(["flatpak", "list", "--app"], capture_output=True, text=True, timeout=2)
-            if "com.google.Chrome" in r.stdout:
-                return "flatpak run com.google.Chrome"
-        except Exception:
-            pass
-        return None
-
+        return _get_chrome_linux()
     if system == "Windows":
-        candidates: list[str] = []
-        # via which
-        for name in ("chrome", "chrome.exe", "google-chrome"):
-            found = shutil.which(name)
-            if found:
-                candidates.append(found)
-        # well-known locations
-        pf = os.environ.get("PROGRAMFILES", r"C:\Program Files")
-        pf_x86 = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
-        local_app = os.environ.get("LOCALAPPDATA", "")
-        user_profile = os.environ.get("USERPROFILE", "")
-        candidates.extend([
-            str(Path(pf) / "Google" / "Chrome" / "Application" / "chrome.exe"),
-            str(Path(pf_x86) / "Google" / "Chrome" / "Application" / "chrome.exe"),
-            str(Path(local_app) / "Google" / "Chrome" / "Application" / "chrome.exe"),
-            str(Path(user_profile) / "AppData" / "Local" / "Google" / "Chrome" / "Application" / "chrome.exe"),
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        ])
-        for p in candidates:
-            if p and Path(p).is_file():
-                return p
-        # Chromium / Edge fallback (both are Chromium-based and support --remote-debugging-port)
-        for p in (
-            str(Path(pf) / "Chromium" / "Application" / "chrome.exe"),
-            str(Path(local_app) / "Chromium" / "Application" / "chrome.exe"),
-            str(Path(pf) / "Microsoft" / "Edge" / "Application" / "msedge.exe"),
-            str(Path(pf_x86) / "Microsoft" / "Edge" / "Application" / "msedge.exe"),
-            str(Path(local_app) / "Microsoft" / "Edge" / "Application" / "msedge.exe"),
-        ):
-            if Path(p).is_file():
-                return p
-        # Check registry via where
-        try:
-            r = subprocess.run(["where", "chrome"], capture_output=True, text=True, timeout=2)
-            if r.returncode == 0:
-                for line in r.stdout.splitlines():
-                    if Path(line.strip()).is_file():
-                        return line.strip()
-        except Exception:
-            pass
-        return None
+        return _get_chrome_windows()
 
-    # Unknown OS – try which
     for name in ("google-chrome", "chromium-browser", "chromium", "chrome"):
         found = shutil.which(name)
         if found:
@@ -170,10 +175,10 @@ def get_default_profile_dir() -> Path | None:
         return home / "Library" / "Application Support" / "Google" / "Chrome"
     if system == "Linux":
         # Try google-chrome first, then chromium
-        for cand in (home / ".config" / "google-chrome", home / ".config" / "chromium", home / "snap" / "chromium" / "common" / "chromium"):
+        for cand in (home / DIR_CONFIG / "google-chrome", home / DIR_CONFIG / "chromium", home / "snap" / "chromium" / "common" / "chromium"):
             if cand.is_dir():
                 return cand
-        return home / ".config" / "google-chrome"
+        return home / DIR_CONFIG / "google-chrome"
     if system == "Windows":
         local = os.environ.get("LOCALAPPDATA") or str(home / "AppData" / "Local")
         p = Path(local) / "Google" / "Chrome" / "User Data"
@@ -201,6 +206,21 @@ def should_exclude(path: Path) -> bool:
     return False
 
 
+def _copy_profile_item(item: Path, dst: Path):
+    if should_exclude(item):
+        return
+    dest = dst / item.name
+    try:
+        if item.is_dir():
+            if dest.exists():
+                return
+            shutil.copytree(item, dest, symlinks=True, ignore=lambda d, names: {n for n in names if n in EXCLUDE_NAMES or any(n.startswith(p) for p in EXCLUDE_PREFIXES)})
+        else:
+            shutil.copy2(item, dest)
+    except Exception as e:
+        print(f"  skip {item.name}: {e}")
+
+
 def prepare_debug_profile(src: Path | None, dst: Path) -> None:
     flag = dst / PROFILE_READY_FLAG
     if flag.is_file():
@@ -213,22 +233,7 @@ def prepare_debug_profile(src: Path | None, dst: Path) -> None:
     if src is not None and src.is_dir():
         try:
             for item in src.iterdir():
-                if should_exclude(item):
-                    continue
-                dest = dst / item.name
-                try:
-                    if item.is_dir():
-                        # skip if already exists (shouldn't on first run)
-                        if dest.exists():
-                            continue
-                        shutil.copytree(item, dest, symlinks=True, ignore=lambda d, names: {n for n in names if n in EXCLUDE_NAMES or any(n.startswith(p) for p in EXCLUDE_PREFIXES)})
-                    else:
-                        if should_exclude(item):
-                            continue
-                        shutil.copy2(item, dest)
-                except Exception as e:
-                    # non-fatal: skip problematic files (locks, sockets)
-                    print(f"  skip {item.name}: {e}")
+                _copy_profile_item(item, dst)
             print(f"✅ Chrome profile copied to debug profile ({dst})")
         except Exception as e:
             print(f"  profile copy warning: {e}")
@@ -327,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     print("Troubleshooting steps:", file=sys.stderr)
     print("1. Make sure no other Chrome is blocking the port", file=sys.stderr)
     print("2. Try running the script again", file=sys.stderr)
-    print(f"3. Or start Chrome manually with:", file=sys.stderr)
+    print("3. Or start Chrome manually with:", file=sys.stderr)
     print(f'   "{chrome_bin}" --remote-debugging-port={port} --user-data-dir="{debug_dir}"', file=sys.stderr)
     return 1
 
