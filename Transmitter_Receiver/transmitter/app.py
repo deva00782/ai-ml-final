@@ -259,14 +259,14 @@ def _close_desktop_jiosaavn(reason="back to level"):
         logging.getLogger().info(f"[JIOSAAVN] Forwarding close to secondary device (UART) ({reason})")
         _set_jiosaavn_status("desktop", "closed", f"Closed ({reason})")
         uart_transmitter.send_action("back_to_level_2")
-
-    try:
-        if DESKTOP_AVAILABLE and desktop_controller is not None:
-            desktop_controller.close_browser()
-        _set_jiosaavn_status("desktop", "closed", "Closed (back to level)")
-        logging.getLogger().info(f"[JIOSAAVN] Desktop Chrome closed ({reason})")
-    except Exception:
-        logging.getLogger().exception("[JIOSAAVN] Failed to close Desktop Chrome")
+    else:
+        try:
+            if DESKTOP_AVAILABLE and desktop_controller is not None:
+                desktop_controller.close_browser()
+            _set_jiosaavn_status("desktop", "closed", "Closed (back to level)")
+            logging.getLogger().info(f"[JIOSAAVN] Desktop Chrome closed ({reason})")
+        except Exception:
+            logging.getLogger().exception("[JIOSAAVN] Failed to close Desktop Chrome")
 
 def _launch_jiosaavn_async(device):
     """Reuse existing launch mechanisms. Never crashes FSM."""

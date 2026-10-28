@@ -81,17 +81,29 @@ def _is_bluetooth_port(p) -> bool:
     return "BTHENUM" in hwid_str or "BLUETOOTH" in desc_str or "BTH" in hwid_str
 
 
-def _is_uart_port(p) -> bool:
-    """Check if port matches known USB-to-UART bridge signatures."""
+def _is_non_uart_device(p) -> bool:
+    """Exclude Bluetooth serial links, phone modems, smartphones, and non-UART USB devices."""
     if _is_bluetooth_port(p):
+        return True
+    desc = p.description or ""
+    hwid = p.hwid or ""
+    mfg = getattr(p, "manufacturer", "") or ""
+    combined = f"{desc} {hwid} {mfg}".upper()
+    excluded_keywords = (
+        "MODEM", "SAMSUNG", "PHONE", "ANDROID", "APPLE",
+        "MOBILE", "SMARTPHONE", "HUAWEI", "XIAOMI", "ONEPLUS", "MOTOROLA"
+    )
+    return any(k in combined for k in excluded_keywords)
+
+
+def _is_uart_port(p) -> bool:
+    """Check if port matches known USB-to-UART bridge signatures (Silicon Labs, FTDI, CH340, etc.)."""
+    if _is_non_uart_device(p):
         return False
     if p.vid in COMMON_UART_VIDS:
         return True
-    hwid_str = (p.hwid or "").upper()
-    desc_str = (p.description or "").upper()
-    if any(sig in hwid_str or sig in desc_str for sig in UART_KEYWORDS):
-        return True
-    if p.vid is not None and "USB" in hwid_str:
+    combined = f"{p.description or ''} {p.hwid or ''}".upper()
+    if any(sig in combined for sig in UART_KEYWORDS):
         return True
     return False
 
@@ -125,11 +137,12 @@ def _port_to_candidate(p):
 
 
 def _find_fallback_port():
+    """Fallback search strictly for dedicated USB serial converters, ignoring all non-UART devices."""
     for p in serial.tools.list_ports.comports():
-        if _is_bluetooth_port(p):
+        if _is_non_uart_device(p):
             continue
-        desc_or_hwid = ((p.description or "") + " " + (p.hwid or "")).upper()
-        if "USB" in desc_or_hwid:
+        desc_or_hwid = f"{p.description or ''} {p.hwid or ''}".upper()
+        if any(term in desc_or_hwid for term in ("SERIAL", "UART", "CP210", "CH34", "FTDI")):
             return p.device
     return None
 
