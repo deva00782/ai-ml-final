@@ -643,8 +643,11 @@ class MQTTService:
 
         song_title = payload.get("title") or payload.get("song") or payload.get("track") or payload.get("song_name") or "Playing Track"
         artist_name = payload.get("artist") or payload.get("singers") or payload.get("subtitle") or payload.get("artist_name") or "JioSaavn Artist"
-        
-        self.logger.info(f"[JIOSAAVN REALTIME] [{self.active_device}] {song_title} \u2014 {artist_name}")
+        status_name = payload.get("status") or payload.get("state") or "Playing"
+        media_key = (self.active_device, song_title, artist_name, status_name)
+        if getattr(self, "_last_logged_media", None) != media_key:
+            self._last_logged_media = media_key
+            self.logger.info(f"[JIOSAAVN REALTIME] [{self.active_device}] {song_title} \u2014 {artist_name}")
         
         self.socketio.emit('media_update', {
             "title": song_title,

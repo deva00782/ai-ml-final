@@ -100,6 +100,9 @@ public class BciMediaService extends NotificationListenerService {
     private String lastKnownArtist = "Unknown Artist";
     private String lastKnownAlbumArt = "";
     private String lastKnownPackage = "";
+    private String lastPublishedMqttTitle = null;
+    private String lastPublishedMqttArtist = null;
+    private String lastPublishedMqttStatus = null;
 
     // Deduplication cache: tracks recent command_ids to prevent re-execution from multi-topic delivery or QoS retries
     private final Map<String, Long> processedCommandIds = Collections.synchronizedMap(
@@ -138,6 +141,9 @@ public class BciMediaService extends NotificationListenerService {
             connectToMqttBroker();
         } else {
             this.isRemoteActive = false;
+        this.lastPublishedMqttTitle = null;
+        this.lastPublishedMqttArtist = null;
+        this.lastPublishedMqttStatus = null;
             Log.d(TAG, "onListenerConnected: User previously disconnected. Staying in standby.");
         }
     }
@@ -188,6 +194,9 @@ public class BciMediaService extends NotificationListenerService {
         android.content.SharedPreferences prefs = getSharedPreferences(MainActivity.PREFS_NAME, MODE_PRIVATE);
         prefs.edit().putBoolean(MainActivity.KEY_USER_DISCONNECTED, true).apply();
         this.isRemoteActive = false;
+        this.lastPublishedMqttTitle = null;
+        this.lastPublishedMqttArtist = null;
+        this.lastPublishedMqttStatus = null;
         if (MainActivity.getInstance() != null) {
             MainActivity.getInstance().updateStatusDisconnecting();
         }
@@ -1519,7 +1528,15 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
                 });
             }
 
-            if (mqttClient != null && mqttClient.isConnected()) {
+            boolean mediaStateChanged = !java.util.Objects.equals(lastPublishedMqttTitle, lastKnownTitle)
+                    || !java.util.Objects.equals(lastPublishedMqttArtist, lastKnownArtist)
+                    || !java.util.Objects.equals(lastPublishedMqttStatus, status);
+
+            if (mediaStateChanged && mqttClient != null && mqttClient.isConnected()) {
+                lastPublishedMqttTitle = lastKnownTitle;
+                lastPublishedMqttArtist = lastKnownArtist;
+                lastPublishedMqttStatus = status;
+
                 MqttMessage message = new MqttMessage(payload.toString().getBytes());
                 message.setQos(1);
                 publishMqttAsync(getMediaTopic(), message);
