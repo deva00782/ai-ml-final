@@ -34,7 +34,15 @@ public class MainActivity extends AppCompatActivity {
     public static final String KEY_DEVICE_ID = "bci_device_id";
     public static final String KEY_USER_DISCONNECTED = "bci_user_disconnected";
 
-    public static MainActivity instance;
+    private static MainActivity instance;
+
+    public static synchronized MainActivity getInstance() {
+        return instance;
+    }
+
+    private static synchronized void setInstance(MainActivity activity) {
+        instance = activity;
+    }
 
     // Existing UI references
     private TextView tvStatus;
@@ -68,8 +76,8 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable uiRefreshRunnable = new Runnable() {
         @Override
         public void run() {
-            if (BciMediaService.instance != null) {
-                BciMediaService.instance.refreshMediaTelemetry();
+            if (BciMediaService.getInstance() != null) {
+                BciMediaService.getInstance().refreshMediaTelemetry();
             }
             uiRefreshHandler.postDelayed(this, 1000);
         }
@@ -80,7 +88,7 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        instance = this;
+        setInstance(this);
 
         // Bind existing views
         tvStatus = findViewById(R.id.tvStatus);
@@ -148,8 +156,8 @@ public class MainActivity extends AppCompatActivity {
             updateStatusConnecting();
             appendLog("SYSTEM ACTION: Connecting to server...");
 
-            if (BciMediaService.instance != null) {
-                BciMediaService.instance.connectMqtt();
+            if (BciMediaService.getInstance() != null) {
+                BciMediaService.getInstance().connectMqtt();
             } else {
                 appendLog("SYSTEM WARNING: BciMediaService is initializing...");
             }
@@ -161,8 +169,8 @@ public class MainActivity extends AppCompatActivity {
             updateStatusDisconnecting();
             appendLog("SYSTEM ACTION: Disconnecting from server...");
 
-            if (BciMediaService.instance != null) {
-                BciMediaService.instance.disconnectMqtt();
+            if (BciMediaService.getInstance() != null) {
+                BciMediaService.getInstance().disconnectMqtt();
             } else {
                 updateStatusOffline("Service stopped");
             }
@@ -176,8 +184,8 @@ public class MainActivity extends AppCompatActivity {
         if (btnSearchAndPlay != null) {
             btnSearchAndPlay.setOnClickListener(v -> {
                 String query = etSearchQuery == null ? "" : etSearchQuery.getText().toString();
-                if (BciMediaService.instance != null) {
-                    BciMediaService.instance.searchAndPlaySong(query);
+                if (BciMediaService.getInstance() != null) {
+                    BciMediaService.getInstance().searchAndPlaySong(query);
                 } else {
                     appendLog("SEARCH WARNING: Media service is not ready.");
                 }
@@ -233,16 +241,16 @@ public class MainActivity extends AppCompatActivity {
             boolean userDisconnected = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getBoolean(KEY_USER_DISCONNECTED, false);
 
-            if (BciMediaService.instance != null) {
-                if (BciMediaService.instance.isMqttConnected()) {
+            if (BciMediaService.getInstance() != null) {
+                if (BciMediaService.getInstance().isMqttConnected()) {
                     updateStatusOnline();
                 } else if (!userDisconnected) {
                     updateStatusConnecting();
-                    BciMediaService.instance.connectMqtt();
+                    BciMediaService.getInstance().connectMqtt();
                 } else {
                     updateStatusOffline("Disconnected");
                 }
-                BciMediaService.instance.refreshMediaTelemetry();
+                BciMediaService.getInstance().refreshMediaTelemetry();
             } else {
                 updateStatusOffline(null);
             }
@@ -334,8 +342,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void openJioSaavn() {
-        if (BciMediaService.instance != null) {
-            BciMediaService.instance.launchJioSaavn();
+        if (BciMediaService.getInstance() != null) {
+            BciMediaService.getInstance().launchJioSaavn();
             return;
         }
         String[] packages = {"com.jio.media.jiobeats", "com.jio.media.jiosaavn"};
@@ -351,7 +359,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private boolean isAccessibilityServiceEnabled() {
-        if (BciAccessibilityService.instance != null) {
+        if (BciAccessibilityService.getInstance() != null) {
             return true;
         }
         int accessibilityEnabled = 0;
@@ -437,8 +445,8 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         uiRefreshHandler.removeCallbacks(uiRefreshRunnable);
-        if (instance == this) {
-            instance = null;
+        if (getInstance() == this) {
+            setInstance(null);
         }
     }
 
@@ -516,8 +524,8 @@ public class MainActivity extends AppCompatActivity {
                     })
                     .setNegativeButton("Disconnect", (dialog, which) -> {
                         updateStatusOffline("Name conflict");
-                        if (BciMediaService.instance != null) {
-                            BciMediaService.instance.disconnectMqtt();
+                        if (BciMediaService.getInstance() != null) {
+                            BciMediaService.getInstance().disconnectMqtt();
                         }
                     })
                     .show();
@@ -612,8 +620,8 @@ public class MainActivity extends AppCompatActivity {
             }
             appendLog("DEVICE ID: Set to '" + cleaned + "' [ANDROID] UUID=" + deviceId.substring(0, Math.min(8, deviceId.length())) + "...");
 
-            if (BciMediaService.instance != null) {
-                BciMediaService.instance.updateDeviceUsername(cleaned, selectedType, deviceId);
+            if (BciMediaService.getInstance() != null) {
+                BciMediaService.getInstance().updateDeviceUsername(cleaned, selectedType, deviceId);
             }
         });
 

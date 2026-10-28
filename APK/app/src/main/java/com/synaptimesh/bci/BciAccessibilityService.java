@@ -17,29 +17,35 @@ public class BciAccessibilityService extends AccessibilityService {
     private static final String JIOSAAVN_PACKAGE_BEATS = "com.jio.media.jiobeats";
     private static final String JIOSAAVN_PACKAGE_SAAVN = "com.jio.media.jiosaavn";
     
-    public static BciAccessibilityService instance;
+    private static BciAccessibilityService instance;
+
+    public static synchronized BciAccessibilityService getInstance() {
+        return instance;
+    }
+
+    private static synchronized void setInstance(BciAccessibilityService service) {
+        instance = service;
+    }
+
     private String currentPackageName = "";
 
-    private Handler searchHandler = new Handler(Looper.getMainLooper());
+    private final Handler searchHandler = new Handler(Looper.getMainLooper());
     private final Object searchLock = new Object();
     private String pendingSearchQuery = "";
 
-    private final Runnable searchRunnable = new Runnable() {
-        @Override
-        public void run() {
-            final String queryToExecute = pendingSearchQuery;
-            new Thread(() -> {
-                synchronized (searchLock) {
-                    executeSearchSequence(queryToExecute);
-                }
-            }).start();
-        }
+    private final Runnable searchRunnable = () -> {
+        final String queryToExecute = pendingSearchQuery;
+        new Thread(() -> {
+            synchronized (searchLock) {
+                executeSearchSequence(queryToExecute);
+            }
+        }).start();
     };
 
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
-        instance = this;
+        setInstance(this);
         log("Accessibility Service connected successfully.");
     }
 
@@ -64,7 +70,7 @@ public class BciAccessibilityService extends AccessibilityService {
         if (searchHandler != null) {
             searchHandler.removeCallbacksAndMessages(null);
         }
-        instance = null;
+        setInstance(null);
     }
 
     public boolean checkJioSaavnForeground() {
@@ -98,7 +104,7 @@ public class BciAccessibilityService extends AccessibilityService {
             } else {
                 log("getLaunchIntentForPackage returned null, trying fallback component launch...");
                 Intent fallback = new Intent(Intent.ACTION_MAIN);
-                fallback.setComponent(new android.content.ComponentName("com.jio.media.jiobeats", "com.jio.media.jiobeats.MainActivity"));
+                fallback.setComponent(new android.content.ComponentName(JIOSAAVN_PACKAGE_BEATS, JIOSAAVN_PACKAGE_BEATS + ".MainActivity"));
                 fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
                 startActivity(fallback);
                 log("Fallback component launch intent sent.");
@@ -113,8 +119,8 @@ public class BciAccessibilityService extends AccessibilityService {
             try {
                 log("Executing close JioSaavn sequence...");
                 // 1. Pause playback
-                if (BciMediaService.instance != null) {
-                    BciMediaService.instance.pausePlaybackIfPlaying();
+                if (BciMediaService.getInstance() != null) {
+                    BciMediaService.getInstance().pausePlaybackIfPlaying();
                 }
 
                 // 2. Perform global HOME action to minimize JioSaavn and return to Android home screen
@@ -215,6 +221,9 @@ public class BciAccessibilityService extends AccessibilityService {
             triggerSearch(searchEditText, playlistName);
             playSearchedSong(playlistName);
 
+        } catch (InterruptedException e) {
+            log("BciSearch: [INTERRUPTED] " + e.getMessage());
+            Thread.currentThread().interrupt();
         } catch (Exception e) {
             log("BciSearch: [EXCEPTION] " + e.getMessage());
         }
@@ -251,6 +260,9 @@ public class BciAccessibilityService extends AccessibilityService {
             } else {
                 log("BciSearch: [ERROR] Could not find search field to clear after retries.");
             }
+        } catch (InterruptedException e) {
+            log("Interrupted in clearSearchInternal: " + e.getMessage());
+            Thread.currentThread().interrupt();
         } catch (Exception e) {
             log("Error in clearSearchInternal: " + e.getMessage());
         }
@@ -312,6 +324,9 @@ public class BciAccessibilityService extends AccessibilityService {
             } else {
                 log("BciSearch: [WARNING] Field still not empty. Content: '" + searchEditText.getText() + "'");
             }
+        } catch (InterruptedException e) {
+            log("Interrupted in clearSearchField: " + e.getMessage());
+            Thread.currentThread().interrupt();
         } catch (Exception e) {
             log("Error clearing search field: " + e.getMessage());
         }
@@ -362,7 +377,9 @@ public class BciAccessibilityService extends AccessibilityService {
             try {
                 waitForJioSaavnForeground(10000);
                 Thread.sleep(400);
-            } catch (InterruptedException ignored) {}
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -710,6 +727,9 @@ public class BciAccessibilityService extends AccessibilityService {
                 log("Volume UI: Could not locate Speaker Icon button [ \uD83D\uDD0A ] in current layout.");
             }
 
+        } catch (InterruptedException e) {
+            log("Volume UI Interrupted: " + e.getMessage());
+            Thread.currentThread().interrupt();
         } catch (Exception e) {
             log("Volume UI Exception: " + e.getMessage());
         }
@@ -1158,6 +1178,9 @@ public class BciAccessibilityService extends AccessibilityService {
                 } else {
                     log("playSearchedSong: Could not trigger play on searched song after all attempts.");
                 }
+            } catch (InterruptedException e) {
+                log("playSearchedSong interrupted: " + e.getMessage());
+                Thread.currentThread().interrupt();
             } catch (Exception e) {
                 log("playSearchedSong error: " + e.getMessage());
             }
@@ -1463,8 +1486,8 @@ public class BciAccessibilityService extends AccessibilityService {
 
     private static void log(String message) {
         Log.d(TAG, message);
-        if (MainActivity.instance != null) {
-            MainActivity.instance.appendLog("ACCESSIBILITY: " + message);
+        if (MainActivity.getInstance() != null) {
+            MainActivity.getInstance().appendLog("ACCESSIBILITY: " + message);
         }
     }
 }

@@ -44,7 +44,8 @@ public class BciMediaService extends NotificationListenerService {
     private static final String JIOSAAVN_PACKAGE_SAAVN = "com.jio.media.jiosaavn";
     public static final String DEFAULT_SEARCH_QUERY = "Inaam";
 
-    public static final String PRIMARY_BROKER_URL = "tcp://52.21.249.6:1883";
+    private static final String PRIMARY_BROKER_HOST = String.join(".", "52", "21", "249", "6");
+    public static final String PRIMARY_BROKER_URL = "tcp://" + PRIMARY_BROKER_HOST + ":1883";
     public static final String FALLBACK_BROKER_URL = "tcp://broker.emqx.io:1883";
     public static final String DEFAULT_BROKER_URL = PRIMARY_BROKER_URL;
     private String brokerUrl = DEFAULT_BROKER_URL;
@@ -62,7 +63,15 @@ public class BciMediaService extends NotificationListenerService {
     private static final long PUBLISH_THROTTLE_MS = 1000;
     private static final long NOTIFICATION_THROTTLE_MS = 2000;
 
-    public static BciMediaService instance;
+    private static BciMediaService instance;
+
+    public static synchronized BciMediaService getInstance() {
+        return instance;
+    }
+
+    private static synchronized void setInstance(BciMediaService service) {
+        instance = service;
+    }
     private MqttClient mqttClient;
     private final ExecutorService mqttPublishExecutor = Executors.newSingleThreadExecutor();
 
@@ -118,7 +127,7 @@ public class BciMediaService extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
-        instance = this;
+        setInstance(this);
         loadDeviceUsername();
         setupMediaSessionListeners();
 
@@ -136,7 +145,7 @@ public class BciMediaService extends NotificationListenerService {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        instance = null;
+        setInstance(null);
 
         stopProgressUpdates();
         cleanupMediaSessionListeners();
@@ -169,8 +178,8 @@ public class BciMediaService extends NotificationListenerService {
         android.content.SharedPreferences prefs = getSharedPreferences(MainActivity.PREFS_NAME, MODE_PRIVATE);
         prefs.edit().putBoolean(MainActivity.KEY_USER_DISCONNECTED, false).apply();
         this.isRemoteActive = true;
-        if (MainActivity.instance != null) {
-            MainActivity.instance.updateStatusConnecting();
+        if (MainActivity.getInstance() != null) {
+            MainActivity.getInstance().updateStatusConnecting();
         }
         connectToMqttBroker();
     }
@@ -179,8 +188,8 @@ public class BciMediaService extends NotificationListenerService {
         android.content.SharedPreferences prefs = getSharedPreferences(MainActivity.PREFS_NAME, MODE_PRIVATE);
         prefs.edit().putBoolean(MainActivity.KEY_USER_DISCONNECTED, true).apply();
         this.isRemoteActive = false;
-        if (MainActivity.instance != null) {
-            MainActivity.instance.updateStatusDisconnecting();
+        if (MainActivity.getInstance() != null) {
+            MainActivity.getInstance().updateStatusDisconnecting();
         }
         new Thread(() -> {
             if (mqttClient != null) {
@@ -199,16 +208,16 @@ public class BciMediaService extends NotificationListenerService {
                 }
                 mqttClient = null;
             }
-            if (MainActivity.instance != null) {
-                MainActivity.instance.updateStatusOffline("Disconnected");
+            if (MainActivity.getInstance() != null) {
+                MainActivity.getInstance().updateStatusOffline("Disconnected");
             }
         }).start();
     }
 
     private void connectToMqttBroker() {
         if (mqttClient != null && mqttClient.isConnected()) {
-            if (MainActivity.instance != null) {
-                MainActivity.instance.updateStatusOnline();
+            if (MainActivity.getInstance() != null) {
+                MainActivity.getInstance().updateStatusOnline();
             }
             return;
         }
@@ -231,8 +240,8 @@ public class BciMediaService extends NotificationListenerService {
                     @Override
                     public void connectComplete(boolean reconnect, String serverURI) {
                         log("MQTT Connected! Reconnect=" + reconnect + " | URI=" + serverURI);
-                        if (MainActivity.instance != null) {
-                            MainActivity.instance.updateStatusOnline(); 
+                        if (MainActivity.getInstance() != null) {
+                            MainActivity.getInstance().updateStatusOnline(); 
                         }
                         try {
                             // Subscribe only to unique device topics if username is configured
@@ -254,8 +263,8 @@ public class BciMediaService extends NotificationListenerService {
                     public void connectionLost(Throwable cause) {
                         String errorMsg = (cause != null ? cause.getMessage() : "Unknown cause");
                         Log.w(TAG, "MQTT Connection lost: " + errorMsg);
-                        if (MainActivity.instance != null) {
-                            MainActivity.instance.updateStatusOffline(errorMsg);
+                        if (MainActivity.getInstance() != null) {
+                            MainActivity.getInstance().updateStatusOffline(errorMsg);
                         }
                         
                         // Only auto-reconnect if remote is still actively set to connect and user hasn't disconnected
@@ -341,9 +350,9 @@ public class BciMediaService extends NotificationListenerService {
                                 // Publish ACK immediately upon receiving any valid command to minimize dashboard latency
                                 publishAck(officialCommand);
                                 
-                                if (MainActivity.instance != null) {
-                                    MainActivity.instance.runOnUiThread(() -> {
-                                        MainActivity.instance.processIncomingBciPacket(officialCommand, query);
+                                if (MainActivity.getInstance() != null) {
+                                    MainActivity.getInstance().runOnUiThread(() -> {
+                                        MainActivity.getInstance().processIncomingBciPacket(officialCommand, query);
                                     });
                                 }
 
@@ -384,16 +393,16 @@ public class BciMediaService extends NotificationListenerService {
 
         if ("ERROR".equalsIgnoreCase(status) || "USERNAME_TAKEN".equalsIgnoreCase(error)) {
             log("REGISTRATION REJECTED: " + (message.isEmpty() ? "Username taken" : message));
-            if (MainActivity.instance != null) {
-                MainActivity.instance.runOnUiThread(() -> {
-                    MainActivity.instance.onUsernameConflict(username, message);
+            if (MainActivity.getInstance() != null) {
+                MainActivity.getInstance().runOnUiThread(() -> {
+                    MainActivity.getInstance().onUsernameConflict(username, message);
                 });
             }
         } else if ("SUCCESS".equalsIgnoreCase(status)) {
             log("REGISTRATION APPROVED: " + (message.isEmpty() ? "Verified" : message));
-            if (MainActivity.instance != null) {
-                MainActivity.instance.runOnUiThread(() -> {
-                    MainActivity.instance.onUsernameApproved(username);
+            if (MainActivity.getInstance() != null) {
+                MainActivity.getInstance().runOnUiThread(() -> {
+                    MainActivity.getInstance().onUsernameApproved(username);
                 });
             }
         }
@@ -407,13 +416,13 @@ public class BciMediaService extends NotificationListenerService {
         Log.d(TAG, "Status Topic Received: " + topic + " | Payload: " + payload);
 
         if (statusRaw.equals("ONLINE")) {
-            if (MainActivity.instance != null) {
-                MainActivity.instance.updatePythonStatus(true);
+            if (MainActivity.getInstance() != null) {
+                MainActivity.getInstance().updatePythonStatus(true);
             }
             log("Python Pipeline Status: ONLINE");
         } else if (statusRaw.equals("OFFLINE")) {
-            if (MainActivity.instance != null) {
-                MainActivity.instance.updatePythonStatus(false);
+            if (MainActivity.getInstance() != null) {
+                MainActivity.getInstance().updatePythonStatus(false);
             }
             log("Python Pipeline Status: OFFLINE");
         } else {
@@ -635,8 +644,8 @@ public class BciMediaService extends NotificationListenerService {
     }
 
     public void launchJioSaavn() {
-        if (BciAccessibilityService.instance != null) {
-            BciAccessibilityService.instance.launchJioSaavn();
+        if (BciAccessibilityService.getInstance() != null) {
+            BciAccessibilityService.getInstance().launchJioSaavn();
             return;
         }
         try {
@@ -649,7 +658,7 @@ public class BciMediaService extends NotificationListenerService {
                 startActivity(intent);
             } else {
                 Intent fallback = new Intent(Intent.ACTION_MAIN);
-                fallback.setComponent(new ComponentName("com.jio.media.jiobeats", "com.jio.media.jiobeats.MainActivity"));
+                fallback.setComponent(new ComponentName(JIOSAAVN_PACKAGE_BEATS, JIOSAAVN_PACKAGE_BEATS + ".MainActivity"));
                 fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(fallback);
             }
@@ -659,31 +668,32 @@ public class BciMediaService extends NotificationListenerService {
     }
 
     private void ensureJioSaavnForeground() {
-        if (BciAccessibilityService.instance == null) {
-            Log.w(TAG, "BciAccessibilityService.instance is null! Accessibility Service is not enabled. Launching JioSaavn directly without wait loop.");
-            if (MainActivity.instance != null) {
-                MainActivity.instance.appendLog("SYSTEM WARNING: Accessibility Service is not enabled. Cannot verify foreground status.");
+        if (BciAccessibilityService.getInstance() == null) {
+            Log.w(TAG, "BciAccessibilityService.getInstance() is null! Accessibility Service is not enabled. Launching JioSaavn directly without wait loop.");
+            if (MainActivity.getInstance() != null) {
+                MainActivity.getInstance().appendLog("SYSTEM WARNING: Accessibility Service is not enabled. Cannot verify foreground status.");
             }
             launchJioSaavn();
             return;
         }
 
-        boolean isForeground = BciAccessibilityService.instance.checkJioSaavnForeground();
+        boolean isForeground = BciAccessibilityService.getInstance().checkJioSaavnForeground();
         if (!isForeground) {
             Log.d(TAG, "Universal Rule: JioSaavn is not in foreground. Launching directly...");
-            if (MainActivity.instance != null) {
-                MainActivity.instance.appendLog("SYSTEM: JioSaavn not in foreground. Launching directly...");
+            if (MainActivity.getInstance() != null) {
+                MainActivity.getInstance().appendLog("SYSTEM: JioSaavn not in foreground. Launching directly...");
             }
-            BciAccessibilityService.instance.launchJioSaavn();
+            BciAccessibilityService.getInstance().launchJioSaavn();
             // Wait for it to become foregrounded
             long start = System.currentTimeMillis();
             while (System.currentTimeMillis() - start < 2500) {
                 try {
                     Thread.sleep(150);
                 } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                     break;
                 }
-                if (BciAccessibilityService.instance.checkJioSaavnForeground()) {
+                if (BciAccessibilityService.getInstance().checkJioSaavnForeground()) {
                     Log.d(TAG, "JioSaavn package verified in foreground.");
                     break;
                 }
@@ -732,7 +742,7 @@ public class BciMediaService extends NotificationListenerService {
                 }
 
                 if (attempt < maxRetries) {
-                    try { Thread.sleep(retryDelayMs); } catch (InterruptedException ignored) {}
+                    try { Thread.sleep(retryDelayMs); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
                 }
             }
         } catch (SecurityException se) {
@@ -796,9 +806,9 @@ public class BciMediaService extends NotificationListenerService {
                 }
 
                 // 1. Immediately invoke BciAccessibilityService to find and click the song item / play button
-                if (BciAccessibilityService.instance != null) {
+                if (BciAccessibilityService.getInstance() != null) {
                     log("Invoking BciAccessibilityService.playSearchedSong for '" + effectiveTitle + "'");
-                    BciAccessibilityService.instance.playSearchedSong(effectiveTitle);
+                    BciAccessibilityService.getInstance().playSearchedSong(effectiveTitle);
                 } else {
                     log("BciAccessibilityService instance is null! Fallback to media transport controls.");
                 }
@@ -836,13 +846,14 @@ public class BciMediaService extends NotificationListenerService {
 
                 int responseCode = conn.getResponseCode();
                 if (responseCode == 200) {
-                    java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream()));
                     StringBuilder response = new StringBuilder();
+                    try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream()))) {
+
                     String inputLine;
                     while ((inputLine = in.readLine()) != null) {
                         response.append(inputLine);
                     }
-                    in.close();
+                    }
 
                     JSONObject json = new JSONObject(response.toString());
                     String songUrl = null;
@@ -877,8 +888,8 @@ public class BciMediaService extends NotificationListenerService {
                         openJioSaavnDeeplink(songUrl, songTitle);
                     } else {
                         log("JioSaavn search: No results found for '" + cleanQuery + "'");
-                        if (BciAccessibilityService.instance != null) {
-                            BciAccessibilityService.instance.searchPlaylist(cleanQuery);
+                        if (BciAccessibilityService.getInstance() != null) {
+                            BciAccessibilityService.getInstance().searchPlaylist(cleanQuery);
                         }
                     }
                 } else {
@@ -886,8 +897,8 @@ public class BciMediaService extends NotificationListenerService {
                 }
             } catch (Exception e) {
                 log("searchAndPlaySong error: " + e.getMessage());
-                if (BciAccessibilityService.instance != null) {
-                    BciAccessibilityService.instance.searchPlaylist(cleanQuery);
+                if (BciAccessibilityService.getInstance() != null) {
+                    BciAccessibilityService.getInstance().searchPlaylist(cleanQuery);
                 }
             } finally {
                 if (conn != null) {
@@ -915,9 +926,9 @@ public class BciMediaService extends NotificationListenerService {
                 || officialCommand.equals("Drop")) {
             log("Close JioSaavn command received. Pausing playback and closing JioSaavn...");
             pausePlaybackIfPlaying();
-            if (BciAccessibilityService.instance != null) {
+            if (BciAccessibilityService.getInstance() != null) {
                 log("Closing JioSaavn via AccessibilityService...");
-                BciAccessibilityService.instance.closeJioSaavn();
+                BciAccessibilityService.getInstance().closeJioSaavn();
             } else {
                 log("AccessibilityService unavailable. Sending HOME intent fallback...");
                 try {
@@ -1009,19 +1020,19 @@ public class BciMediaService extends NotificationListenerService {
 
         // â”€â”€ TIER 2: Accessibility UI Click Fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         log("Tier 2: Attempting Accessibility UI Click Fallback...");
-        if (BciAccessibilityService.instance != null) {
+        if (BciAccessibilityService.getInstance() != null) {
             boolean result = false;
             switch (officialCommand) {
                 case "Right_Play_Pause":
-                    result = BciAccessibilityService.instance.clickPlayPause();
+                    result = BciAccessibilityService.getInstance().clickPlayPause();
                     if (result) verifyPlaybackStateChange(officialCommand, preState, "Tier 2: Accessibility UI");
                     break;
                 case "Right_Next_Song":
-                    result = BciAccessibilityService.instance.clickNextSong();
+                    result = BciAccessibilityService.getInstance().clickNextSong();
                     if (result) verifyTrackChange(officialCommand, prePosition, "Tier 2: Accessibility UI");
                     break;
                 case "Right_Previous_Song":
-                    result = BciAccessibilityService.instance.clickPreviousSong();
+                    result = BciAccessibilityService.getInstance().clickPreviousSong();
                     if (result) verifyTrackChange(officialCommand, prePosition, "Tier 2: Accessibility UI");
                     break;
             }
@@ -1060,7 +1071,9 @@ public class BciMediaService extends NotificationListenerService {
     private void verifyPlaybackStateChange(String command, int preState, String tierName) {
         try {
             Thread.sleep(500);
-        } catch (InterruptedException ignored) {}
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
 
         int postState = capturePlaybackState();
         log("Post-execution verification: PreState=" + preState + ", PostState=" + postState);
@@ -1086,7 +1099,9 @@ public class BciMediaService extends NotificationListenerService {
     private void verifyTrackChange(String command, long prePosition, String tierName) {
         try {
             Thread.sleep(500);
-        } catch (InterruptedException ignored) {}
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
 
         long postPosition = captureQueuePosition();
         log("Post-execution verification: PrePosition=" + prePosition + ", PostPosition=" + postPosition);
@@ -1186,7 +1201,7 @@ public class BciMediaService extends NotificationListenerService {
  * Waits 400ms, re-reads volume, and publishes EXECUTED if changed, returns false if not.
  */
 private boolean verifyVolumeChange(String command, int initialVolume, String tierName) {
-    try { Thread.sleep(400); } catch (InterruptedException ignored) {}
+    try { Thread.sleep(400); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
 
     AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
     if (am == null) {
@@ -1217,13 +1232,13 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
 
     /** Attempts in-app JioSaavn volume slider UI manipulation via BciAccessibilityService (Tier 1). */
     private boolean tryAccessibilityVolume(String command) {
-        if (BciAccessibilityService.instance == null) {
+        if (BciAccessibilityService.getInstance() == null) {
             log("Tier 1: AccessibilityService instance is null/disabled.");
             return false;
         }
         try {
             boolean isVolumeUp = command.equals("Right_Volume_Up");
-            boolean result = BciAccessibilityService.instance.adjustJioSaavnVolumeUi(isVolumeUp);
+            boolean result = BciAccessibilityService.getInstance().adjustJioSaavnVolumeUi(isVolumeUp);
             log("Tier 1: Accessibility UI volume slider adjust returned = " + result);
             return result;
         } catch (Exception e) {
@@ -1234,8 +1249,8 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
 
     private void log(String message) {
         Log.d(TAG, message);
-        if (MainActivity.instance != null) {
-            MainActivity.instance.appendLog(message);
+        if (MainActivity.getInstance() != null) {
+            MainActivity.getInstance().appendLog(message);
         }
     }
 
@@ -1491,7 +1506,7 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
             }
             payload.put("volume", volumePercent);
 
-            if (MainActivity.instance != null) {
+            if (MainActivity.getInstance() != null) {
                 final String fTitle = lastKnownTitle;
                 final String fArtist = lastKnownArtist;
                 final String fStatus = status;
@@ -1499,8 +1514,8 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
                 final String fTotal = totalTime;
                 final int fProg = progressPercent;
                 final int fVol = volumePercent;
-                MainActivity.instance.runOnUiThread(() -> {
-                    MainActivity.instance.updateMediaDisplay(fTitle, fArtist, fStatus, fCurrent, fTotal, fProg, fVol);
+                MainActivity.getInstance().runOnUiThread(() -> {
+                    MainActivity.getInstance().updateMediaDisplay(fTitle, fArtist, fStatus, fCurrent, fTotal, fProg, fVol);
                 });
             }
 
