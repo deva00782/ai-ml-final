@@ -1,0 +1,25 @@
+# Build and cache directories
+.gradle/
+build/
+**/build/
+.idea/
+*.iml
+.DS_Store
+**/.DS_Store
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Local configuration & credentials
+local.properties
+.env
+*.pem
+
+# Runtime logs
+*.log
+logs/
+**/logs/
+
+# IDE and derived data
+.derivedData/
+.vscode/
