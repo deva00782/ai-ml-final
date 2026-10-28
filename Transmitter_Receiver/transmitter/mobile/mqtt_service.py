@@ -216,6 +216,19 @@ class MQTTService:
                 return bool(dev.get("online", False))
         return False
 
+    def _apply_device_status(self, dev, key, is_online):
+        u = (dev.get("username") or "").strip().lower()
+        d = (dev.get("device_id") or "").strip().lower()
+        if u == key or d == key:
+            dev["online"] = is_online
+            dev["status"] = "ONLINE" if is_online else "OFFLINE"
+            if u:
+                self.device_online_statuses[u] = is_online
+            if d:
+                self.device_online_statuses[d] = is_online
+            return True
+        return False
+
     def _set_device_online(self, identifier: str, is_online: bool):
         """Update online status for device across identifiers and registry entries."""
         if not identifier:
@@ -223,15 +236,7 @@ class MQTTService:
         key = str(identifier).strip().lower()
         self.device_online_statuses[key] = is_online
         for dev in self.registered_devices.values():
-            u = (dev.get("username") or "").strip().lower()
-            d = (dev.get("device_id") or "").strip().lower()
-            if u == key or d == key:
-                dev["online"] = is_online
-                dev["status"] = "ONLINE" if is_online else "OFFLINE"
-                if u:
-                    self.device_online_statuses[u] = is_online
-                if d:
-                    self.device_online_statuses[d] = is_online
+            if self._apply_device_status(dev, key, is_online):
                 break
 
     def get_active_device_type(self):
@@ -433,18 +438,31 @@ class MQTTService:
                 return v
         return None
 
+    def _sync_registration_event(self, target_key: str, disc_username: str, disc_type: str, topic: str):
+        if os.environ.get("SYNC_API_ENABLED", "false").lower() in ("true", "1", "yes") and sync_client:
+            try:
+                sync_client.register_device_async(target_key, disc_username, disc_type)
+                sync_client.send_event_async(
+                    kind="device_registration",
+                    device_id=target_key,
+                    status="SUCCESS",
+                    topic=topic,
+                    payload={"username": disc_username, "device_type": disc_type},
+                )
+            except Exception:
+                pass
+
+    def _find_existing_key(self, device_id: Optional[str], disc_username: str) -> Optional[str]:
+        target_dev_id = str(device_id).strip().lower() if device_id else None
+        for k, v in self.registered_devices.items():
+            if target_dev_id and str(v.get("device_id") or "").strip().lower() == target_dev_id:
+                return k
+            if not target_dev_id and str(v.get("username") or "").strip().lower() == disc_username:
+                return k
+        return None
+
     def _apply_registration_record(self, target_key: str, disc_username: str, disc_type: str, topic: str, device_id: Optional[str]):
-        existing_key = None
-        if device_id:
-            for k, v in self.registered_devices.items():
-                if str(v.get("device_id") or "").strip().lower() == str(device_id).strip().lower():
-                    existing_key = k
-                    break
-        else:
-            for k, v in self.registered_devices.items():
-                if str(v.get("username") or "").strip().lower() == disc_username:
-                    existing_key = k
-                    break
+        existing_key = self._find_existing_key(device_id, disc_username)
 
         if existing_key:
             entry = self.registered_devices.pop(existing_key)
@@ -454,20 +472,7 @@ class MQTTService:
             entry["device_type"] = disc_type
             self.registered_devices[target_key] = entry
             db_service.upsert_device(target_key, disc_username, disc_type)
-
-            if os.environ.get("SYNC_API_ENABLED", "false").lower() in ("true", "1", "yes"):
-                try:
-                    if sync_client:
-                        sync_client.register_device_async(target_key, disc_username, disc_type)
-                    sync_client.send_event_async(
-                        kind="device_registration",
-                        device_id=target_key,
-                        status="SUCCESS",
-                        topic=topic,
-                        payload={"username": disc_username, "device_type": disc_type},
-                    )
-                except Exception:
-                    pass
+            self._sync_registration_event(target_key, disc_username, disc_type, topic)
 
             if old_username != disc_username or entry.get("device_type") != disc_type:
                 self.logger.info(f"[MQTT DEDUP] Updated device (UUID={target_key}): '{old_username}' -> '{disc_username}' [{disc_type}]")
@@ -479,20 +484,7 @@ class MQTTService:
             rec = {"device_id": target_key, "username": disc_username, "device_type": disc_type}
             self.registered_devices[target_key] = rec
             db_service.upsert_device(target_key, disc_username, disc_type)
-
-            if os.environ.get("SYNC_API_ENABLED", "false").lower() in ("true", "1", "yes"):
-                try:
-                    if sync_client:
-                        sync_client.register_device_async(target_key, disc_username, disc_type)
-                    sync_client.send_event_async(
-                        kind="device_registration",
-                        device_id=target_key,
-                        status="SUCCESS",
-                        topic=topic,
-                        payload={"username": disc_username, "device_type": disc_type},
-                    )
-                except Exception:
-                    pass
+            self._sync_registration_event(target_key, disc_username, disc_type, topic)
 
             if not self.active_device:
                 self.set_active_device(disc_username)
@@ -504,6 +496,21 @@ class MQTTService:
             self.socketio.emit('device_status_changed', {"device": disc_username, "status": "online", "online": True})
 
         self._send_registration_response(device_id, disc_username, target_key, True)
+
+    def _is_fast_path_match(self, existing_entry, disc_username, disc_type, device_id, target_key) -> bool:
+        if not existing_entry:
+            return False
+        ex_user = str(existing_entry.get("username") or "").strip().lower()
+        ex_type = str(existing_entry.get("device_type") or "android").strip().lower()
+        if ex_user == disc_username and ex_type == disc_type:
+            if not self.active_device:
+                self.set_active_device(disc_username)
+            self._set_device_online(disc_username, True)
+            if device_id:
+                self._set_device_online(device_id, True)
+            self._send_registration_response(device_id, disc_username, target_key, True)
+            return True
+        return False
 
     def _handle_registration_message(self, topic: str, payload: dict, parts: list):
         disc_username = payload.get("username") or (parts[3] if len(parts) >= 4 else None)
@@ -527,17 +534,8 @@ class MQTTService:
                     target_key = k
                     break
 
-        if existing_entry:
-            ex_user = str(existing_entry.get("username") or "").strip().lower()
-            ex_type = str(existing_entry.get("device_type") or "android").strip().lower()
-            if ex_user == disc_username and ex_type == disc_type:
-                if not self.active_device:
-                    self.set_active_device(disc_username)
-                self._set_device_online(disc_username, True)
-                if device_id:
-                    self._set_device_online(device_id, True)
-                self._send_registration_response(device_id, disc_username, target_key, True)
-                return
+        if self._is_fast_path_match(existing_entry, disc_username, disc_type, device_id, target_key):
+            return
 
         conflict_owner = self._find_registration_conflict(disc_username, device_id)
         if conflict_owner:
@@ -605,13 +603,15 @@ class MQTTService:
             return True
         return False
 
+    def _parse_status_payload(self, payload, raw_payload) -> bool:
+        status_raw = payload.get("status") if isinstance(payload, dict) else ""
+        if not status_raw and isinstance(raw_payload, str):
+            status_raw = raw_payload.strip()
+        return str(status_raw).upper() in ("ONLINE", "CONNECTED", "READY", "1", "TRUE")
+
     def _handle_status_message(self, topic: str, payload: dict, raw_payload: str, parts: list, active_username: str, active_statuses: set):
         if topic in active_statuses or (len(parts) >= 3 and parts[0] == "bci" and parts[2] == "status"):
-            status_raw = payload.get("status") if isinstance(payload, dict) else ""
-            if not status_raw and isinstance(raw_payload, str):
-                status_raw = raw_payload.strip()
-            status_str = str(status_raw).upper()
-            is_online = status_str in ("ONLINE", "CONNECTED", "READY", "1", "TRUE")
+            is_online = self._parse_status_payload(payload, raw_payload)
             sender_device = parts[1] if len(parts) >= 3 else (active_username or self.active_device)
             self._set_device_online(sender_device, is_online)
             self.socketio.emit('device_status_changed', {
@@ -661,6 +661,43 @@ class MQTTService:
             "device": self.active_device
         })
     
+    def _connect_to_broker(self, brokers_to_try: list):
+        last_err = None
+        for b in brokers_to_try:
+            try:
+                logging.info(f"[MQTT] Connecting to {b}:{MQTT_PORT}...")
+                self.client.connect(b, MQTT_PORT, keepalive=MQTT_KEEPALIVE)
+                self.active_broker = b
+                logging.info(f"[MQTT] Connected successfully to {b}:{MQTT_PORT}")
+                return
+            except Exception as err:
+                logging.warning(f"[MQTT] Failed to connect to {b}:{MQTT_PORT} ({err})")
+                last_err = err
+        raise ConnectionError(f"Could not connect to any MQTT broker in {brokers_to_try}: {last_err}")
+
+    def _subscribe_default_topics(self):
+        topics_to_sub = [
+            TOPIC_DISCOVERY,
+            "aiml/devices/register",
+            "aiml/devices/register/#",
+            "aiml/+/status",
+            "aiml/+/ack",
+            "aiml/+/media",
+            "aiml/+/heartbeat",
+            TOPIC_ACK, TOPIC_STATUS, TOPIC_HEARTBEAT, TOPIC_MEDIA
+        ]
+        if self.active_device:
+            topics_to_sub.extend([
+                f"aiml/{self.active_device}/ack",
+                f"aiml/{self.active_device}/status",
+                f"aiml/{self.active_device}/media",
+                f"aiml/{self.active_device}/heartbeat",
+            ])
+        for topic in set(topics_to_sub):
+            if topic:
+                self.client.subscribe(topic, qos=MQTT_QOS)
+                logging.info(f"[MQTT] Subscribed to {topic}")
+
     def connect(self):
         """Connect to MQTT broker and return the client instance."""
         if mqtt is None:
@@ -686,47 +723,8 @@ class MQTTService:
             if MQTT_FALLBACK_BROKER and MQTT_FALLBACK_BROKER not in brokers_to_try:
                 brokers_to_try.append(MQTT_FALLBACK_BROKER)
 
-            connected = False
-            last_err = None
-            for b in brokers_to_try:
-                try:
-                    logging.info(f"[MQTT] Connecting to {b}:{MQTT_PORT}...")
-                    self.client.connect(b, MQTT_PORT, keepalive=MQTT_KEEPALIVE)
-                    self.active_broker = b
-                    connected = True
-                    logging.info(f"[MQTT] Connected successfully to {b}:{MQTT_PORT}")
-                    break
-                except Exception as err:
-                    logging.warning(f"[MQTT] Failed to connect to {b}:{MQTT_PORT} ({err})")
-                    last_err = err
-
-            if not connected:
-                raise ConnectionError(f"Could not connect to any MQTT broker in {brokers_to_try}: {last_err}")
-
-            # Subscribe to discovery, wildcards, and active device topics
-            topics_to_sub = [
-                TOPIC_DISCOVERY,
-                "aiml/devices/register",
-                "aiml/devices/register/#",
-                "aiml/+/status",
-                "aiml/+/ack",
-                "aiml/+/media",
-                "aiml/+/heartbeat",
-                TOPIC_ACK, TOPIC_STATUS, TOPIC_HEARTBEAT, TOPIC_MEDIA  # Backward compatibility
-            ]
-            if self.active_device:
-                topics_to_sub.extend([
-                    f"aiml/{self.active_device}/ack",
-                    f"aiml/{self.active_device}/status",
-                    f"aiml/{self.active_device}/media",
-                    f"aiml/{self.active_device}/heartbeat",
-                ])
-
-            for topic in set(topics_to_sub):
-                if topic:
-                    self.client.subscribe(topic, qos=MQTT_QOS)
-                    logging.info(f"[MQTT] Subscribed to {topic}")
-
+            self._connect_to_broker(brokers_to_try)
+            self._subscribe_default_topics()
             self.client.loop_start()
 
             if self.active_device:
@@ -973,6 +971,20 @@ class MQTTService:
         except Exception as e:
             self.logger.error(f"[MQTT ERROR] Failed to toggle media subscription: {e}")
     
+    def _publish_heartbeat_once(self):
+        if not self.client or not self.client.is_connected():
+            return
+        targets = {TOPIC_STATUS, SERVER_STATUS_TOPIC}
+        if self.active_device:
+            targets.add(f"aiml/{self.active_device}/status")
+        for t in targets:
+            self.client.publish(
+                topic=t,
+                payload=ONLINE_PAYLOAD,
+                qos=MQTT_QOS,
+                retain=False,
+            )
+
     def start_status_publisher(self):
         """
         Start a lightweight background thread to periodically republish the ONLINE status.
@@ -982,23 +994,9 @@ class MQTTService:
         def publish_status_periodically():
             while self.status_thread_running:
                 try:
-                    if self.client and self.client.is_connected():
-                        # aiml/status must stay fresh: iOS treats the server as
-                        # offline if this heartbeat is older than ~45s.
-                        targets = {TOPIC_STATUS, SERVER_STATUS_TOPIC}
-                        if self.active_device:
-                            targets.add(f"aiml/{self.active_device}/status")
-                        for t in targets:
-                            self.client.publish(
-                                topic=t,
-                                payload=ONLINE_PAYLOAD,
-                                qos=MQTT_QOS,
-                                retain=False,
-                            )
+                    self._publish_heartbeat_once()
                 except Exception:
                     logging.exception("[MQTT ERROR] Failed to republish status:")
-                
-                # Republish every 30 seconds
                 time.sleep(30)
         
         status_thread = threading.Thread(target=publish_status_periodically, daemon=True)

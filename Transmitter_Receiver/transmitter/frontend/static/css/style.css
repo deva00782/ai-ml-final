@@ -1,4 +1,4 @@
-﻿@import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Share+Tech+Mono&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Share+Tech+Mono&display=swap");
 :root{--bg:#060913;--panel:rgba(10,15,29,0.82);--panel2:rgba(8,12,24,0.72);--border:rgba(30,41,59,0.75);--text:#94a3b8;--text-bright:#e2e8f0;--cyan:#00f6ff;--pink:#d946ef;--violet:#8b5cf6;--green:#22c55e}
 *,*::before,*::after{box-sizing:border-box;min-width:0}
 html{overflow-x:hidden}
@@ -92,10 +92,6 @@ img,svg{max-width:100%;height:auto}
 #utcClock{color:var(--cyan)}
 .volume-bar-container{height:14px;background:rgba(30,41,59,0.85);border-radius:999px;overflow:hidden;border:1px solid rgba(30,41,59,0.8);position:relative}
 .volume-bar-fill{height:100%;background:linear-gradient(90deg, var(--cyan), var(--violet));width:50%;transition:width 0.35s ease}
-.tuning-grid{width:100%}
-@media (max-width:900px){.tuning-grid{grid-template-columns:1fr !important}}
-@media (max-width:640px){body{padding:12px 0}.dash-header{padding:16px}.card{padding:18px}}
-
 /* Sprint 12 integrated: device picker + search (appended, Sprint 11 base retained) */
 .tuning-grid {
   width: 100%;

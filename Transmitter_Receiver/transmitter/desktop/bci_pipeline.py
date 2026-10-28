@@ -227,6 +227,37 @@ class BCIPipelineProcessor:
             self.facade.execute_action(action_to_trigger)
         return song_index
 
+    def _process_entry(self, idx, entry, last_processed_timestamp, song_index):
+        if entry.get("domain") != TARGET_DOMAIN:
+            return last_processed_timestamp, song_index, False
+
+        raw_command = entry.get("command", "Neutral")
+        confidence = float(entry.get("confidence", 0.0))
+        timestamp = float(entry.get("timestamp", time.time()))
+
+        if timestamp <= last_processed_timestamp or confidence < self.bci_filter.threshold:
+            return max(timestamp, last_processed_timestamp), song_index, False
+
+        action_to_trigger = COMMAND_MAPPING.get(raw_command)
+        if not action_to_trigger:
+            return timestamp, song_index, False
+
+        logger.success(self.MODULE_NAME, f"🧠 [AI/ML Sample #{idx}] Command: '{raw_command}' -> Action: '{action_to_trigger}' (Confidence: {confidence * 100:.1f}%)")
+
+        display_label = DISPLAY_LABELS.get(raw_command, raw_command)
+        self.emit_event('command_dispatched', {
+            "command": raw_command,
+            "display_label": display_label,
+            "action": action_to_trigger,
+            "confidence": confidence,
+            "timestamp": timestamp,
+            "domain": TARGET_DOMAIN,
+            "sample": entry.get("sample", idx)
+        })
+
+        song_index = self._execute_bci_action(action_to_trigger, song_index)
+        return timestamp, song_index, True
+
     def _automation_loop(self):
         """Infinite loop iterating through data/integrated_eeg.json considering only AI/ML domain."""
         json_path = DATA_FILE_PATH if DATA_FILE_PATH.exists() else (Path(__file__).parent / "integrated_eeg.json")
@@ -237,12 +268,9 @@ class BCIPipelineProcessor:
 
         while self._is_running:
             entries = self._load_dataset(json_path)
-            if entries is None:
-                if self.interruptible_sleep(3.0):
-                    break
-                continue
-            if not entries:
-                logger.warn(self.MODULE_NAME, "No data entries found in BCI dataset.")
+            if entries is None or not entries:
+                if not entries:
+                    logger.warn(self.MODULE_NAME, "No data entries found in BCI dataset.")
                 if self.interruptible_sleep(3.0):
                     break
                 continue
@@ -258,40 +286,11 @@ class BCIPipelineProcessor:
                 if not self._is_running:
                     break
 
-                if entry.get("domain") != TARGET_DOMAIN:
-                    continue
+                last_processed_timestamp, song_index, executed = self._process_entry(
+                    idx, entry, last_processed_timestamp, song_index
+                )
 
-                raw_command = entry.get("command", "Neutral")
-                confidence = float(entry.get("confidence", 0.0))
-                timestamp = float(entry.get("timestamp", time.time()))
-
-                if timestamp <= last_processed_timestamp or confidence < self.bci_filter.threshold:
-                    if timestamp > last_processed_timestamp:
-                        last_processed_timestamp = timestamp
-                    continue
-
-                action_to_trigger = COMMAND_MAPPING.get(raw_command)
-                if not action_to_trigger:
-                    last_processed_timestamp = timestamp
-                    continue
-
-                logger.success(self.MODULE_NAME, f"🧠 [AI/ML Sample #{idx}] Command: '{raw_command}' -> Action: '{action_to_trigger}' (Confidence: {confidence * 100:.1f}%)")
-
-                display_label = DISPLAY_LABELS.get(raw_command, raw_command)
-                self.emit_event('command_dispatched', {
-                    "command": raw_command,
-                    "display_label": display_label,
-                    "action": action_to_trigger,
-                    "confidence": confidence,
-                    "timestamp": timestamp,
-                    "domain": TARGET_DOMAIN,
-                    "sample": entry.get("sample", idx)
-                })
-
-                song_index = self._execute_bci_action(action_to_trigger, song_index)
-                last_processed_timestamp = timestamp
-
-                if self.interruptible_sleep(3.0):
+                if executed and self.interruptible_sleep(3.0):
                     break
 
             loop_pass += 1

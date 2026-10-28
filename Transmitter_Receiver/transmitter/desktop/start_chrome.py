@@ -111,36 +111,7 @@ def _get_chrome_linux() -> str | None:
     return None
 
 
-def _get_chrome_windows() -> str | None:
-    candidates: list[str] = []
-    for name in ("chrome", EXE_CHROME, "google-chrome"):
-        found = shutil.which(name)
-        if found:
-            candidates.append(found)
-    pf = os.environ.get("PROGRAMFILES", r"C:\Program Files")
-    pf_x86 = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
-    local_app = os.environ.get("LOCALAPPDATA", "")
-    user_profile = os.environ.get("USERPROFILE", "")
-    candidates.extend([
-        str(Path(pf) / "Google" / "Chrome" / "Application" / EXE_CHROME),
-        str(Path(pf_x86) / "Google" / "Chrome" / "Application" / EXE_CHROME),
-        str(Path(local_app) / "Google" / "Chrome" / "Application" / EXE_CHROME),
-        str(Path(user_profile) / "AppData" / "Local" / "Google" / "Chrome" / "Application" / EXE_CHROME),
-        rf"C:\Program Files\Google\Chrome\Application\{EXE_CHROME}",
-        rf"C:\Program Files (x86)\Google\Chrome\Application\{EXE_CHROME}",
-    ])
-    for p in candidates:
-        if p and Path(p).is_file():
-            return p
-    for p in (
-        str(Path(pf) / "Chromium" / "Application" / EXE_CHROME),
-        str(Path(local_app) / "Chromium" / "Application" / EXE_CHROME),
-        str(Path(pf) / "Microsoft" / "Edge" / "Application" / EXE_MSEDGE),
-        str(Path(pf_x86) / "Microsoft" / "Edge" / "Application" / EXE_MSEDGE),
-        str(Path(local_app) / "Microsoft" / "Edge" / "Application" / EXE_MSEDGE),
-    ):
-        if Path(p).is_file():
-            return p
+def _find_where_chrome() -> str | None:
     try:
         r = subprocess.run(["where", "chrome"], capture_output=True, text=True, timeout=2)
         if r.returncode == 0:
@@ -150,6 +121,34 @@ def _get_chrome_windows() -> str | None:
     except Exception:
         pass
     return None
+
+
+def _get_chrome_windows() -> str | None:
+    for name in ("chrome", EXE_CHROME, "google-chrome"):
+        found = shutil.which(name)
+        if found:
+            return found
+    pf = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+    pf_x86 = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
+    local_app = os.environ.get("LOCALAPPDATA", "")
+    user_profile = os.environ.get("USERPROFILE", "")
+    candidates = [
+        str(Path(pf) / "Google" / "Chrome" / "Application" / EXE_CHROME),
+        str(Path(pf_x86) / "Google" / "Chrome" / "Application" / EXE_CHROME),
+        str(Path(local_app) / "Google" / "Chrome" / "Application" / EXE_CHROME),
+        str(Path(user_profile) / "AppData" / "Local" / "Google" / "Chrome" / "Application" / EXE_CHROME),
+        rf"C:\Program Files\Google\Chrome\Application\{EXE_CHROME}",
+        rf"C:\Program Files (x86)\Google\Chrome\Application\{EXE_CHROME}",
+        str(Path(pf) / "Chromium" / "Application" / EXE_CHROME),
+        str(Path(local_app) / "Chromium" / "Application" / EXE_CHROME),
+        str(Path(pf) / "Microsoft" / "Edge" / "Application" / EXE_MSEDGE),
+        str(Path(pf_x86) / "Microsoft" / "Edge" / "Application" / EXE_MSEDGE),
+        str(Path(local_app) / "Microsoft" / "Edge" / "Application" / EXE_MSEDGE),
+    ]
+    for p in candidates:
+        if p and Path(p).is_file():
+            return p
+    return _find_where_chrome()
 
 
 def get_chrome_binary() -> str | None:

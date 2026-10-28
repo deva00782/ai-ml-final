@@ -68,7 +68,8 @@ _DB_FAILURE_COOLDOWN = 30.0
 def _create_db_ssl_context() -> Optional[ssl.SSLContext]:
     if DB_SSLMODE not in ("require", "prefer", "verify-ca", "verify-full"):
         return None
-    ctx = ssl.create_default_context()
+    ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     if os.environ.get("DB_SSL_INSECURE", "false").lower() == "true":
         setattr(ctx, "check_hostname", False)
         setattr(ctx, "verify_mode", getattr(ssl, "CERT_NONE"))
@@ -111,6 +112,16 @@ def _try_psycopg2_connection(host_cand: str, port_cand: int):
         return True, None, e
 
 
+def _connect_candidate(host_cand: str, port_cand: int, ssl_ctx: Optional[ssl.SSLContext]):
+    d_found, conn, err = _try_pg8000_connection(host_cand, port_cand, ssl_ctx)
+    if conn:
+        return True, conn, None
+    d_found2, conn2, err2 = _try_psycopg2_connection(host_cand, port_cand)
+    if conn2:
+        return True, conn2, None
+    return (d_found or d_found2), None, (err2 or err)
+
+
 def _get_connection():
     """Establish a database connection to PostgreSQL (pg8000 or psycopg2).
     Attempts primary endpoint first (AWS RDS / VPN), and falls back to local SSH tunnel (127.0.0.1:15432).
@@ -130,16 +141,7 @@ def _get_connection():
 
     ssl_ctx = _create_db_ssl_context()
     for host_cand, port_cand in candidates:
-        d_found, conn, err = _try_pg8000_connection(host_cand, port_cand, ssl_ctx)
-        driver_found = driver_found or d_found
-        if conn:
-            _last_db_failure = 0.0
-            ACTIVE_HOST, ACTIVE_PORT = host_cand, port_cand
-            return conn
-        if err:
-            last_error = err
-
-        d_found, conn, err = _try_psycopg2_connection(host_cand, port_cand)
+        d_found, conn, err = _connect_candidate(host_cand, port_cand, ssl_ctx)
         driver_found = driver_found or d_found
         if conn:
             _last_db_failure = 0.0

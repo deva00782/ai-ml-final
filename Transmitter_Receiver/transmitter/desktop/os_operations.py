@@ -316,7 +316,7 @@ class MacOSOperations(OSOperations):
         return {"title": STATUS_WAITING_FOR_TRACK, "artist": STATUS_UNKNOWN_ARTIST, "is_playing": False}
 
 
-async def _async_exec(args):
+async def _async_exec(args, timeout=3):
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -324,10 +324,10 @@ async def _async_exec(args):
             stderr=asyncio.subprocess.PIPE
         )
         if hasattr(asyncio, "timeout"):
-            async with asyncio.timeout(3):
+            async with asyncio.timeout(timeout):
                 stdout, _ = await proc.communicate()
         else:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         return proc.returncode, stdout.decode('utf-8', errors='replace')
     except Exception:
         return -1, ""

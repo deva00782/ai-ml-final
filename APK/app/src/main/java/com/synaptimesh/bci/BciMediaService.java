@@ -8,11 +8,9 @@ import android.net.Uri;
 import android.media.AudioManager;
 import android.media.MediaMetadata;
 import android.media.session.MediaController;
-import android.media.session.MediaSession;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.view.KeyEvent;
-import android.accessibilityservice.AccessibilityService;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import android.os.Handler;
@@ -32,7 +30,6 @@ import org.json.JSONObject;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -51,14 +48,32 @@ public class BciMediaService extends NotificationListenerService {
     private String brokerUrl = DEFAULT_BROKER_URL;
     public static final String DISCOVERY_TOPIC = "aiml/devices/register";
 
+    private static final String TOPIC_PREFIX = "aiml/";
+    private static final String KEY_STATUS = "status";
+    private static final String KEY_REMOTE_STATE = "remote_state";
+    private static final String STATE_STANDBY = "STANDBY";
+    private static final String SUFFIX_REGISTER_RESPONSE = "/register_response";
+    private static final String KEY_COMMAND = "command";
+    private static final String CMD_SEARCH = "SEARCH";
+    private static final String CMD_SEARCH_PLAYLIST = "Right_Search_Playlist";
+    private static final String KEY_TITLE = "title";
+    private static final String CMD_PLAY_PAUSE = "Right_Play_Pause";
+    private static final String CMD_NEXT_SONG = "Right_Next_Song";
+    private static final String CMD_PREVIOUS_SONG = "Right_Previous_Song";
+    private static final String CMD_VOLUME_UP = "Right_Volume_Up";
+    private static final String TIER_MEDIA_CONTROLLER = "Tier 1: MediaController";
+    private static final String TIER_ACCESSIBILITY_UI = "Tier 2: Accessibility UI";
+    private static final String TIER_AUDIO_MANAGER = "Tier 3: AudioManager KeyEvent";
+
     private String deviceUsername = "";
+    private String deviceType = "android";
+    private String deviceId = "";
 
     public String getDeviceUsername() { return deviceUsername; }
-    public String getCommandsTopic() { return "aiml/" + deviceUsername + "/commands"; }
-
-    public String getAckTopic() { return "aiml/" + deviceUsername + "/ack"; }
-    public String getStatusTopic() { return "aiml/" + deviceUsername + "/status"; }
-    public String getMediaTopic() { return "aiml/" + deviceUsername + "/media"; }
+    public String getCommandsTopic() { return TOPIC_PREFIX + deviceUsername + "/commands"; }
+    public String getAckTopic() { return TOPIC_PREFIX + deviceUsername + "/ack"; }
+    public String getStatusTopic() { return TOPIC_PREFIX + deviceUsername + "/status"; }
+    public String getMediaTopic() { return TOPIC_PREFIX + deviceUsername + "/media"; }
 
     private static final long PUBLISH_THROTTLE_MS = 1000;
     private static final long NOTIFICATION_THROTTLE_MS = 2000;
@@ -72,6 +87,7 @@ public class BciMediaService extends NotificationListenerService {
     private static synchronized void setInstance(BciMediaService service) {
         instance = service;
     }
+
     private MqttClient mqttClient;
     private final ExecutorService mqttPublishExecutor = Executors.newSingleThreadExecutor();
 
@@ -141,9 +157,9 @@ public class BciMediaService extends NotificationListenerService {
             connectToMqttBroker();
         } else {
             this.isRemoteActive = false;
-        this.lastPublishedMqttTitle = null;
-        this.lastPublishedMqttArtist = null;
-        this.lastPublishedMqttStatus = null;
+            this.lastPublishedMqttTitle = null;
+            this.lastPublishedMqttArtist = null;
+            this.lastPublishedMqttStatus = null;
             Log.d(TAG, "onListenerConnected: User previously disconnected. Staying in standby.");
         }
     }
@@ -204,8 +220,8 @@ public class BciMediaService extends NotificationListenerService {
             if (mqttClient != null) {
                 try {
                     JSONObject status = new JSONObject();
-                    status.put("status", "OFFLINE");
-                    status.put("remote_state", "STANDBY");
+                    status.put(KEY_STATUS, "OFFLINE");
+                    status.put(KEY_REMOTE_STATE, STATE_STANDBY);
                     MqttMessage msg = new MqttMessage(status.toString().getBytes());
                     msg.setQos(1);
                     mqttClient.publish(getStatusTopic(), msg);
@@ -245,140 +261,7 @@ public class BciMediaService extends NotificationListenerService {
                     options.setServerURIs(new String[] { brokerUrl, PRIMARY_BROKER_URL, FALLBACK_BROKER_URL });
                 }
 
-                mqttClient.setCallback(new MqttCallbackExtended() {
-                    @Override
-                    public void connectComplete(boolean reconnect, String serverURI) {
-                        log("MQTT Connected! Reconnect=" + reconnect + " | URI=" + serverURI);
-                        if (MainActivity.getInstance() != null) {
-                            MainActivity.getInstance().updateStatusOnline(); 
-                        }
-                        try {
-                            // Subscribe only to unique device topics if username is configured
-                            if (deviceUsername != null && !deviceUsername.trim().isEmpty()) {
-                                mqttClient.subscribe(getCommandsTopic());
-                                mqttClient.subscribe(getStatusTopic());
-                                Log.d(TAG, "Subscribed to MQTT topics: " + getCommandsTopic() + ", " + getStatusTopic());
-                            }
-                            if (deviceId != null && !deviceId.trim().isEmpty()) {
-                                mqttClient.subscribe("aiml/" + deviceId + "/register_response");
-                            }
-                            publishDeviceRegistration();
-                        } catch (Exception e) {
-                            Log.e(TAG, "Subscription Error after connect", e);
-                        }
-                    }
-
-                    @Override
-                    public void connectionLost(Throwable cause) {
-                        String errorMsg = (cause != null ? cause.getMessage() : "Unknown cause");
-                        Log.w(TAG, "MQTT Connection lost: " + errorMsg);
-                        if (MainActivity.getInstance() != null) {
-                            MainActivity.getInstance().updateStatusOffline(errorMsg);
-                        }
-                        
-                        // Only auto-reconnect if remote is still actively set to connect and user hasn't disconnected
-                        if (isRemoteActive) {
-                            android.content.SharedPreferences prefs = getSharedPreferences(MainActivity.PREFS_NAME, MODE_PRIVATE);
-                            boolean userDisconnected = prefs.getBoolean(MainActivity.KEY_USER_DISCONNECTED, false);
-                            if (!userDisconnected) {
-                                new Handler(Looper.getMainLooper()).postDelayed(() -> {
-                                    if (isRemoteActive && (mqttClient == null || !mqttClient.isConnected())) {
-                                        boolean disconnectedNow = getSharedPreferences(MainActivity.PREFS_NAME, MODE_PRIVATE)
-                                            .getBoolean(MainActivity.KEY_USER_DISCONNECTED, false);
-                                        if (!disconnectedNow) {
-                                            log("Attempting manual MQTT reconnection...");
-                                            connectToMqttBroker();
-                                        }
-                                    }
-                                }, 5000);
-                            }
-                        }
-                    }
-
-                    @Override
-                    public void messageArrived(String topic, MqttMessage message) {
-                        try {
-                            String payload = new String(message.getPayload()).trim();
-                            Log.d(TAG, "MQTT Message Arrived | Topic: " + topic + " | Payload: " + payload);
-                            
-                            JSONObject json = null;
-                            if (payload.startsWith("[")) {
-                                JSONArray array = new JSONArray(payload);
-                                if (array.length() > 0) {
-                                    json = array.getJSONObject(array.length() - 1);
-                                }
-                            } else {
-                                json = new JSONObject(payload);
-                            }
-
-                            if (json != null) {
-                                if (topic.equals("aiml/" + deviceId + "/register_response")) {
-                                    handleRegistrationResponse(json);
-                                    return;
-                                }
-
-                                if (topic.equals(getStatusTopic())) {
-                                    handleStatusUpdate(topic, payload, json);
-                                    return;
-                                }
-
-                                String command = json.has("command") ? json.optString("command", "") : json.optString("Command", "");
-                                if (command.isEmpty()) return;
-
-                                // Filter by target_device if specified to prevent cross-device command crosstalk
-                                String target = json.optString("target_device", "");
-                                if (!target.isEmpty() && !target.equalsIgnoreCase(deviceUsername)
-                                        && !target.equalsIgnoreCase(deviceId)
-                                        && !target.equalsIgnoreCase("mobile") && !target.equalsIgnoreCase("all") && !target.equalsIgnoreCase("android")) {
-                                    Log.d(TAG, "Target device '" + target + "' does not match our device '" + deviceUsername + "' / '" + deviceId + "', ignoring.");
-                                    return;
-                                }
-
-                                // Deduplicate by command_id (prevents multiple executions from duplicate topics or QoS retries)
-                                String commandId = json.optString("command_id", "");
-                                if (!commandId.isEmpty() && isCommandAlreadyProcessed(commandId)) {
-                                    Log.d(TAG, "Duplicate command dropped: " + commandId + " (" + command + ")");
-                                    return;
-                                }
-
-                                // Log reception immediately to the on-screen console
-                                log("MQTT RECEIVED: " + command);
-
-                                if (!isRemoteActive) {
-                                    log("COMMAND IGNORED: Remote is in StandBy mode. Command: " + command);
-                                    Log.w(TAG, "Gating: Ignored command '" + command + "' because isRemoteActive=false");
-                                    return;
-                                }
-
-                                String officialCommand = mapToOfficialCommand(command);
-                                String rawQuery = json.optString("query", "");
-                                String songUrl = json.optString("song_url", "");
-                                boolean isSearchCommand = officialCommand.equals("Right_Search_Playlist") || officialCommand.equals("type_query") || officialCommand.equals("SEARCH");
-                                final String query = (isSearchCommand && rawQuery.trim().isEmpty() && songUrl.trim().isEmpty()) ? DEFAULT_SEARCH_QUERY : rawQuery;
-                                String title = json.optString("title", query);
-                                // Publish ACK immediately upon receiving any valid command to minimize dashboard latency
-                                publishAck(officialCommand);
-                                
-                                if (MainActivity.getInstance() != null) {
-                                    MainActivity.getInstance().runOnUiThread(() -> {
-                                        MainActivity.getInstance().processIncomingBciPacket(officialCommand, query);
-                                    });
-                                }
-
-                                new Thread(() -> {
-                                    translateBrainwaveToMedia(officialCommand, query, songUrl, title);
-                                }).start();
-                            }
-                        } catch (Exception e) {
-                            Log.e(TAG, "MQTT Packet Parse Error", e);
-                            log("MQTT ERROR: Failed to parse packet.");
-                        }
-                    }
-
-                    @Override
-                    public void deliveryComplete(IMqttDeliveryToken token) {}
-                });
-
+                mqttClient.setCallback(createMqttCallback());
                 mqttClient.connect(options);
             } catch (Exception e) {
                 Log.e(TAG, "MQTT Connection Error", e);
@@ -386,16 +269,161 @@ public class BciMediaService extends NotificationListenerService {
         }).start();
     }
 
+    private MqttCallbackExtended createMqttCallback() {
+        return new MqttCallbackExtended() {
+            @Override
+            public void connectComplete(boolean reconnect, String serverURI) {
+                log("MQTT Connected! Reconnect=" + reconnect + " | URI=" + serverURI);
+                if (MainActivity.getInstance() != null) {
+                    MainActivity.getInstance().updateStatusOnline(); 
+                }
+                subscribeAfterConnect();
+            }
+
+            @Override
+            public void connectionLost(Throwable cause) {
+                handleMqttConnectionLost(cause);
+            }
+
+            @Override
+            public void messageArrived(String topic, MqttMessage message) {
+                onMessageArrivedInternal(topic, message);
+            }
+
+            @Override
+            public void deliveryComplete(IMqttDeliveryToken token) {
+                // Tracking delivery complete tokens is not required
+            }
+        };
+    }
+
+    private void subscribeAfterConnect() {
+        try {
+            if (deviceUsername != null && !deviceUsername.trim().isEmpty()) {
+                mqttClient.subscribe(getCommandsTopic());
+                mqttClient.subscribe(getStatusTopic());
+                Log.d(TAG, "Subscribed to MQTT topics: " + getCommandsTopic() + ", " + getStatusTopic());
+            }
+            if (deviceId != null && !deviceId.trim().isEmpty()) {
+                mqttClient.subscribe(TOPIC_PREFIX + deviceId + SUFFIX_REGISTER_RESPONSE);
+            }
+            publishDeviceRegistration();
+        } catch (Exception e) {
+            Log.e(TAG, "Subscription Error after connect", e);
+        }
+    }
+
+    private void handleMqttConnectionLost(Throwable cause) {
+        String errorMsg = (cause != null ? cause.getMessage() : "Unknown cause");
+        Log.w(TAG, "MQTT Connection lost: " + errorMsg);
+        if (MainActivity.getInstance() != null) {
+            MainActivity.getInstance().updateStatusOffline(errorMsg);
+        }
+
+        if (isRemoteActive) {
+            android.content.SharedPreferences prefs = getSharedPreferences(MainActivity.PREFS_NAME, MODE_PRIVATE);
+            boolean userDisconnected = prefs.getBoolean(MainActivity.KEY_USER_DISCONNECTED, false);
+            if (!userDisconnected) {
+                scheduleMqttReconnect();
+            }
+        }
+    }
+
+    private void scheduleMqttReconnect() {
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (isRemoteActive && (mqttClient == null || !mqttClient.isConnected())) {
+                boolean disconnectedNow = getSharedPreferences(MainActivity.PREFS_NAME, MODE_PRIVATE)
+                    .getBoolean(MainActivity.KEY_USER_DISCONNECTED, false);
+                if (!disconnectedNow) {
+                    log("Attempting manual MQTT reconnection...");
+                    connectToMqttBroker();
+                }
+            }
+        }, 5000);
+    }
+
+    private void onMessageArrivedInternal(String topic, MqttMessage message) {
+        try {
+            String payload = new String(message.getPayload()).trim();
+            Log.d(TAG, "MQTT Message Arrived | Topic: " + topic + " | Payload: " + payload);
+
+            JSONObject json = parseMessagePayload(payload);
+            if (json == null) return;
+
+            if (topic.equals(TOPIC_PREFIX + deviceId + SUFFIX_REGISTER_RESPONSE)) {
+                handleRegistrationResponse(json);
+                return;
+            }
+
+            if (topic.equals(getStatusTopic())) {
+                handleStatusUpdate(topic, payload, json);
+                return;
+            }
+
+            processCommandPayload(json);
+        } catch (Exception e) {
+            Log.e(TAG, "MQTT Packet Parse Error", e);
+            log("MQTT ERROR: Failed to parse packet.");
+        }
+    }
+
+    private JSONObject parseMessagePayload(String payload) throws Exception {
+        if (payload.startsWith("[")) {
+            JSONArray array = new JSONArray(payload);
+            return (array.length() > 0) ? array.getJSONObject(array.length() - 1) : null;
+        }
+        return new JSONObject(payload);
+    }
+
+    private void processCommandPayload(JSONObject json) {
+        String command = json.has(KEY_COMMAND) ? json.optString(KEY_COMMAND, "") : json.optString("Command", "");
+        if (command.isEmpty()) return;
+
+        String target = json.optString("target_device", "");
+        if (!target.isEmpty() && !target.equalsIgnoreCase(deviceUsername)
+                && !target.equalsIgnoreCase(deviceId)
+                && !target.equalsIgnoreCase("mobile") && !target.equalsIgnoreCase("all") && !target.equalsIgnoreCase("android")) {
+            Log.d(TAG, "Target device '" + target + "' does not match our device '" + deviceUsername + "' / '" + deviceId + "', ignoring.");
+            return;
+        }
+
+        String commandId = json.optString("command_id", "");
+        if (!commandId.isEmpty() && isCommandAlreadyProcessed(commandId)) {
+            Log.d(TAG, "Duplicate command dropped: " + commandId + " (" + command + ")");
+            return;
+        }
+
+        log("MQTT RECEIVED: " + command);
+        if (!isRemoteActive) {
+            log("COMMAND IGNORED: Remote is in StandBy mode. Command: " + command);
+            Log.w(TAG, "Gating: Ignored command '" + command + "' because isRemoteActive=false");
+            return;
+        }
+
+        String officialCommand = mapToOfficialCommand(command);
+        String rawQuery = json.optString("query", "");
+        String songUrl = json.optString("song_url", "");
+        boolean isSearchCommand = officialCommand.equals(CMD_SEARCH_PLAYLIST) || officialCommand.equals("type_query") || officialCommand.equals(CMD_SEARCH);
+        final String query = (isSearchCommand && rawQuery.trim().isEmpty() && songUrl.trim().isEmpty()) ? DEFAULT_SEARCH_QUERY : rawQuery;
+        String title = json.optString(KEY_TITLE, query);
+
+        publishAck(officialCommand);
+        if (MainActivity.getInstance() != null) {
+            MainActivity.getInstance().runOnUiThread(() -> MainActivity.getInstance().processIncomingBciPacket(officialCommand, query));
+        }
+
+        new Thread(() -> translateBrainwaveToMedia(officialCommand, query, songUrl, title)).start();
+    }
+
     private void handleRegistrationResponse(JSONObject json) {
         if (json == null) return;
         String respDeviceId = json.optString("device_id", "");
-        // Filter by deviceId if provided to ensure message was meant for this device
         if (!respDeviceId.isEmpty() && !respDeviceId.equalsIgnoreCase(this.deviceId)) {
             Log.d(TAG, "Ignoring registration response for different device ID: " + respDeviceId);
             return;
         }
 
-        String status = json.optString("status", "");
+        String status = json.optString(KEY_STATUS, "");
         String username = json.optString("username", this.deviceUsername);
         String message = json.optString("message", "");
         String error = json.optString("error", "");
@@ -403,16 +431,12 @@ public class BciMediaService extends NotificationListenerService {
         if ("ERROR".equalsIgnoreCase(status) || "USERNAME_TAKEN".equalsIgnoreCase(error)) {
             log("REGISTRATION REJECTED: " + (message.isEmpty() ? "Username taken" : message));
             if (MainActivity.getInstance() != null) {
-                MainActivity.getInstance().runOnUiThread(() -> {
-                    MainActivity.getInstance().onUsernameConflict(username, message);
-                });
+                MainActivity.getInstance().runOnUiThread(() -> MainActivity.getInstance().onUsernameConflict(username, message));
             }
         } else if ("SUCCESS".equalsIgnoreCase(status)) {
             log("REGISTRATION APPROVED: " + (message.isEmpty() ? "Verified" : message));
             if (MainActivity.getInstance() != null) {
-                MainActivity.getInstance().runOnUiThread(() -> {
-                    MainActivity.getInstance().onUsernameApproved(username);
-                });
+                MainActivity.getInstance().runOnUiThread(() -> MainActivity.getInstance().onUsernameApproved(username));
             }
         }
     }
@@ -421,7 +445,7 @@ public class BciMediaService extends NotificationListenerService {
         if (!topic.equals(getStatusTopic())) {
             return;
         }
-        String statusRaw = json.optString("status", "").toUpperCase();
+        String statusRaw = json.optString(KEY_STATUS, "").toUpperCase();
         Log.d(TAG, "Status Topic Received: " + topic + " | Payload: " + payload);
 
         if (statusRaw.equals("ONLINE")) {
@@ -435,73 +459,65 @@ public class BciMediaService extends NotificationListenerService {
             }
             log("Python Pipeline Status: OFFLINE");
         } else {
-            // Ignore REMOTE_ACTIVE, REMOTE_STANDBY or other internal statuses
             Log.d(TAG, "Ignoring non-Python status: " + statusRaw);
         }
+    }
+
+    private boolean isPlayPauseCommand(String cmd) {
+        return cmd.equals("LEFT") || cmd.equals("PLAY") || cmd.equals("PAUSE")
+                || cmd.contains("PLAY_PAUSE") || cmd.contains("PLAY/PAUSE") || cmd.contains("PLAY / PAUSE");
+    }
+
+    private boolean isNextCommand(String cmd) {
+        return cmd.equals("PUSH") || cmd.equals("NEXT")
+                || cmd.contains("NEXT_SONG") || cmd.contains("NEXTTRACK") || cmd.contains("NEXT_TRACK") || cmd.contains("NEXT TRACK");
+    }
+
+    private boolean isPrevCommand(String cmd) {
+        return cmd.equals("PULL") || cmd.equals("PREV") || cmd.equals("PREVIOUS")
+                || cmd.contains("PREVIOUS_SONG") || cmd.contains("PREVTRACK") || cmd.contains("PREV_TRACK") || cmd.contains("PREV_SONG");
+    }
+
+    private boolean isVolumeUpCommand(String cmd) {
+        return cmd.equals("RIGHT+PUSH") || cmd.equals("RIGHT_PUSH")
+                || cmd.contains("VOLUME_UP") || cmd.contains("VOLUMEUP") || cmd.contains("VOLUME UP") || cmd.contains("VOL_UP");
+    }
+
+    private boolean isVolumeDownCommand(String cmd) {
+        return cmd.equals("RIGHT+PULL") || cmd.equals("RIGHT_PULL")
+                || cmd.contains("VOLUME_DOWN") || cmd.contains("VOLUMEDOWN") || cmd.contains("VOLUME DOWN") || cmd.contains("VOL_DOWN");
+    }
+
+    private boolean isSearchCommand(String cmd) {
+        return cmd.equals("RIGHT") || cmd.equals("SEARCH")
+                || cmd.contains("SEARCH_PLAYLIST") || cmd.contains("PLAYLIST") || cmd.contains("TYPE_QUERY");
+    }
+
+    private boolean isCloseAppCommand(String cmd) {
+        return cmd.equals("RIGHT_CLOSE_APP") || cmd.equals("CLOSE")
+                || cmd.contains("CLOSE_APP") || cmd.contains("CLOSE_JIOSAAVN")
+                || cmd.contains("BACK_TO_LEVEL_2") || cmd.equals("PUSH+RIGHT")
+                || cmd.equals("PUSH_RIGHT") || cmd.equals("DROP")
+                || cmd.equals("BACK") || cmd.equals("HOME")
+                || cmd.contains("RETURN_TO_HOME") || cmd.contains("RETURN TO HOME");
     }
 
     private String mapToOfficialCommand(String command) {
         if (command == null) return "";
         String cmdUpper = command.toUpperCase().trim();
 
-        // Play / Pause mappings
-        if (cmdUpper.equals("LEFT") || cmdUpper.equals("PLAY") || cmdUpper.equals("PAUSE")
-                || cmdUpper.contains("PLAY_PAUSE") || cmdUpper.contains("PLAY/PAUSE")
-                || cmdUpper.contains("PLAY / PAUSE")) {
-            return "Right_Play_Pause";
-        }
-        // Next Song mappings
-        if (cmdUpper.equals("PUSH") || cmdUpper.equals("NEXT")
-                || cmdUpper.contains("NEXT_SONG") || cmdUpper.contains("NEXTTRACK")
-                || cmdUpper.contains("NEXT_TRACK") || cmdUpper.contains("NEXT TRACK")) {
-            return "Right_Next_Song";
-        }
-        // Previous Song mappings
-        if (cmdUpper.equals("PULL") || cmdUpper.equals("PREV") || cmdUpper.equals("PREVIOUS")
-                || cmdUpper.contains("PREVIOUS_SONG") || cmdUpper.contains("PREVTRACK")
-                || cmdUpper.contains("PREV_TRACK") || cmdUpper.contains("PREV_SONG")) {
-            return "Right_Previous_Song";
-        }
-        // Volume Up mappings
-        if (cmdUpper.equals("RIGHT+PUSH") || cmdUpper.equals("RIGHT_PUSH")
-                || cmdUpper.contains("VOLUME_UP") || cmdUpper.contains("VOLUMEUP")
-                || cmdUpper.contains("VOLUME UP") || cmdUpper.contains("VOL_UP")) {
-            return "Right_Volume_Up";
-        }
-        // Volume Down mappings
-        if (cmdUpper.equals("RIGHT+PULL") || cmdUpper.equals("RIGHT_PULL")
-                || cmdUpper.contains("VOLUME_DOWN") || cmdUpper.contains("VOLUMEDOWN")
-                || cmdUpper.contains("VOLUME DOWN") || cmdUpper.contains("VOL_DOWN")) {
-            return "Right_Volume_Down";
-        }
-        // Search Playlist / Query mappings
-        if (cmdUpper.equals("RIGHT") || cmdUpper.equals("SEARCH")
-                || cmdUpper.contains("SEARCH_PLAYLIST") || cmdUpper.contains("PLAYLIST")
-                || cmdUpper.contains("TYPE_QUERY")) {
-            return "Right_Search_Playlist";
-        }
-        // Close App / Return to home / Drop / Back to Level 2 mappings
-        if (cmdUpper.equals("RIGHT_CLOSE_APP") || cmdUpper.equals("CLOSE")
-                || cmdUpper.contains("CLOSE_APP") || cmdUpper.contains("CLOSE_JIOSAAVN")
-                || cmdUpper.contains("BACK_TO_LEVEL_2") || cmdUpper.equals("PUSH+RIGHT")
-                || cmdUpper.equals("PUSH_RIGHT") || cmdUpper.equals("DROP")
-                || cmdUpper.equals("BACK") || cmdUpper.equals("HOME")
-                || cmdUpper.contains("RETURN_TO_HOME") || cmdUpper.contains("RETURN TO HOME")) {
-            return "Right_Close_App";
-        }
-        // JioSaavn launch
-        if (cmdUpper.contains("JIOSAAVN") || cmdUpper.contains("OPEN_JIOSAAVN")) {
-            return "Right_JioSaavn";
-        }
-        return command; // Default to raw if no mapping found
+        if (isPlayPauseCommand(cmdUpper)) return CMD_PLAY_PAUSE;
+        if (isNextCommand(cmdUpper)) return CMD_NEXT_SONG;
+        if (isPrevCommand(cmdUpper)) return CMD_PREVIOUS_SONG;
+        if (isVolumeUpCommand(cmdUpper)) return CMD_VOLUME_UP;
+        if (isVolumeDownCommand(cmdUpper)) return "Right_Volume_Down";
+        if (isSearchCommand(cmdUpper)) return CMD_SEARCH_PLAYLIST;
+        if (isCloseAppCommand(cmdUpper)) return "Right_Close_App";
+        if (cmdUpper.contains("JIOSAAVN") || cmdUpper.contains("OPEN_JIOSAAVN")) return "Right_JioSaavn";
+
+        return command;
     }
 
-
-
-    /**
-     * Publishes an ACK back to the Python pipeline on aiml/<username>/ack.
-     * Matches the subscriber.py handler: data.get("status") == "EXECUTED"
-     */
     private void publishAck(String command) {
         publishAck(command, null);
     }
@@ -510,8 +526,8 @@ public class BciMediaService extends NotificationListenerService {
         if (mqttClient != null && mqttClient.isConnected()) {
             try {
                 JSONObject ack = new JSONObject();
-                ack.put("status", "EXECUTED");
-                ack.put("command", command);
+                ack.put(KEY_STATUS, "EXECUTED");
+                ack.put(KEY_COMMAND, command);
                 if (successfulTier != null && !successfulTier.isEmpty()) {
                     ack.put("tier", successfulTier);
                 }
@@ -533,17 +549,12 @@ public class BciMediaService extends NotificationListenerService {
         }
     }
 
-    /**
-     * Publishes a FAILED ACK back to the Python pipeline.
-     * This is sent when post-execution verification detects that the command
-     * was silently dropped by the OS (e.g., ColorOS background restrictions).
-     */
     private void publishFailedAck(String command, String reason) {
         if (mqttClient != null && mqttClient.isConnected()) {
             try {
                 JSONObject ack = new JSONObject();
-                ack.put("status", "FAILED");
-                ack.put("command", command);
+                ack.put(KEY_STATUS, "FAILED");
+                ack.put(KEY_COMMAND, command);
                 ack.put("reason", reason);
                 ack.put("timestamp", new java.text.SimpleDateFormat(
                     "yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.getDefault())
@@ -559,10 +570,6 @@ public class BciMediaService extends NotificationListenerService {
         }
     }
 
-    /**
-     * Captures the current PlaybackState code from JioSaavn's MediaController.
-     * Returns -1 if no controller or state is available.
-     */
     private int capturePlaybackState() {
         try {
             MediaController controller = findJioSaavnController(1, 200);
@@ -578,10 +585,6 @@ public class BciMediaService extends NotificationListenerService {
         return -1;
     }
 
-    /**
-     * Captures the current media queue position (active queue item ID).
-     * Returns -1 if unavailable. Used to verify next/previous song actually changed tracks.
-     */
     private long captureQueuePosition() {
         try {
             MediaController controller = findJioSaavnController(1, 200);
@@ -597,11 +600,9 @@ public class BciMediaService extends NotificationListenerService {
         return -1;
     }
 
-
-
     public void setRemoteActive(boolean active) {
         this.isRemoteActive = active;
-        
+
         if (active && (mqttClient == null || !mqttClient.isConnected())) {
             log("Remote set to ACTIVE but MQTT disconnected. Nudging...");
             connectToMqttBroker();
@@ -611,11 +612,11 @@ public class BciMediaService extends NotificationListenerService {
             try {
                 JSONObject status = new JSONObject();
                 if (active) {
-                    status.put("status", "REMOTE_ACTIVE");
-                    status.put("remote_state", "ACTIVE");
+                    status.put(KEY_STATUS, "REMOTE_ACTIVE");
+                    status.put(KEY_REMOTE_STATE, "ACTIVE");
                 } else {
-                    status.put("status", "REMOTE_STANDBY");
-                    status.put("remote_state", "STANDBY");
+                    status.put(KEY_STATUS, "REMOTE_STANDBY");
+                    status.put(KEY_REMOTE_STATE, STATE_STANDBY);
                 }
                 MqttMessage msg = new MqttMessage(status.toString().getBytes());
                 msg.setQos(1);
@@ -678,9 +679,9 @@ public class BciMediaService extends NotificationListenerService {
 
     private void ensureJioSaavnForeground() {
         if (BciAccessibilityService.getInstance() == null) {
-            Log.w(TAG, "BciAccessibilityService.getInstance() is null! Accessibility Service is not enabled. Launching JioSaavn directly without wait loop.");
+            Log.w(TAG, "Accessibility Service is not enabled. Launching JioSaavn directly.");
             if (MainActivity.getInstance() != null) {
-                MainActivity.getInstance().appendLog("SYSTEM WARNING: Accessibility Service is not enabled. Cannot verify foreground status.");
+                MainActivity.getInstance().appendLog("SYSTEM WARNING: Accessibility Service is not enabled.");
             }
             launchJioSaavn();
             return;
@@ -693,30 +694,44 @@ public class BciMediaService extends NotificationListenerService {
                 MainActivity.getInstance().appendLog("SYSTEM: JioSaavn not in foreground. Launching directly...");
             }
             BciAccessibilityService.getInstance().launchJioSaavn();
-            // Wait for it to become foregrounded
+
             long start = System.currentTimeMillis();
-            while (System.currentTimeMillis() - start < 2500) {
+            boolean inForeground = false;
+            while ((System.currentTimeMillis() - start < 2500) && !inForeground) {
                 try {
                     Thread.sleep(150);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
                 }
-                if (BciAccessibilityService.getInstance().checkJioSaavnForeground()) {
-                    Log.d(TAG, "JioSaavn package verified in foreground.");
-                    break;
-                }
+                inForeground = BciAccessibilityService.getInstance().checkJioSaavnForeground();
+            }
+            if (inForeground) {
+                Log.d(TAG, "JioSaavn package verified in foreground.");
             }
         }
     }
 
-    /**
-     * Attempts to find an active MediaController for JioSaavn.
-     * Retries up to maxRetries times with retryDelayMs between each attempt.
-     * Returns null if not found within the retry window.
-     */
     private MediaController findJioSaavnController(int maxRetries, long retryDelayMs) {
         return findJioSaavnController(maxRetries, retryDelayMs, false);
+    }
+
+    private void sleepQuietly(long delayMs) {
+        try {
+            Thread.sleep(delayMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private MediaController findMatchingSession(List<MediaController> controllers) {
+        if (controllers == null) return null;
+        for (MediaController c : controllers) {
+            if (isJioSaavnPackage(c.getPackageName())) {
+                return c;
+            }
+        }
+        return null;
     }
 
     private MediaController findJioSaavnController(int maxRetries, long retryDelayMs, boolean silent) {
@@ -728,30 +743,18 @@ public class BciMediaService extends NotificationListenerService {
             ComponentName listenerComponent = new ComponentName(this, BciMediaService.class);
 
             for (int attempt = 1; attempt <= maxRetries; attempt++) {
-                List<MediaController> controllers =
-                    sessionManager.getActiveSessions(listenerComponent);
-
-                if (!silent && controllers != null && !controllers.isEmpty()) {
-                    StringBuilder sb = new StringBuilder("Active Media Sessions: ");
-                    for (MediaController mc : controllers) {
-                        sb.append(mc.getPackageName()).append(", ");
-                    }
-                    log(sb.toString());
-                }
-
-                for (MediaController c : controllers) {
-                    if (isJioSaavnPackage(c.getPackageName())) {
-                        log("MediaController found for JioSaavn on attempt " + attempt);
-                        return c;
-                    }
+                List<MediaController> controllers = sessionManager.getActiveSessions(listenerComponent);
+                MediaController match = findMatchingSession(controllers);
+                if (match != null) {
+                    if (!silent) log("MediaController found for JioSaavn on attempt " + attempt);
+                    return match;
                 }
 
                 if (!silent) {
                     log("JioSaavn MediaController not found. Attempt " + attempt + "/" + maxRetries + ". Retrying...");
                 }
-
                 if (attempt < maxRetries) {
-                    try { Thread.sleep(retryDelayMs); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                    sleepQuietly(retryDelayMs);
                 }
             }
         } catch (SecurityException se) {
@@ -765,11 +768,21 @@ public class BciMediaService extends NotificationListenerService {
         return null;
     }
 
-    /**
-     * Tier 2 & 3 Fallback: dispatch a media KeyEvent via AudioManager,
-     * then also via direct KeyEvent injection for maximum compatibility.
-     */
-
+    private boolean launchDeeplinkIntent(Intent intent) {
+        String[] packages = new String[]{JIOSAAVN_PACKAGE_BEATS, JIOSAAVN_PACKAGE_SAAVN};
+        for (String pkg : packages) {
+            try {
+                getPackageManager().getPackageInfo(pkg, 0);
+                intent.setPackage(pkg);
+                startActivity(intent);
+                log("Launched JioSaavn deep link via package: " + pkg);
+                return true;
+            } catch (Exception ignored) {
+                // Ignore package not found and test next candidate
+            }
+        }
+        return false;
+    }
 
     public void openJioSaavnDeeplink(String songUrl, String title) {
         if (songUrl == null || songUrl.trim().isEmpty()) {
@@ -789,32 +802,19 @@ public class BciMediaService extends NotificationListenerService {
         log("Opening JioSaavn deep link: " + trimmedUrl + (!effectiveTitle.isEmpty() ? " (" + effectiveTitle + ")" : ""));
         new Handler(Looper.getMainLooper()).post(() -> {
             try {
-                // Pause any existing playback immediately so previous audio does not bleed into the new song
                 pausePlaybackIfPlaying();
 
                 Uri uri = Uri.parse(trimmedUrl);
                 Intent intent = new Intent(Intent.ACTION_VIEW, uri);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
-                boolean launched = false;
-                String[] packages = new String[]{JIOSAAVN_PACKAGE_BEATS, JIOSAAVN_PACKAGE_SAAVN};
-                for (String pkg : packages) {
-                    try {
-                        getPackageManager().getPackageInfo(pkg, 0);
-                        intent.setPackage(pkg);
-                        startActivity(intent);
-                        launched = true;
-                        log("Launched JioSaavn deep link via package: " + pkg);
-                        break;
-                    } catch (Exception ignored) {}
-                }
+                boolean launched = launchDeeplinkIntent(intent);
                 if (!launched) {
                     intent.setPackage(null);
                     startActivity(intent);
                     log("Launched deep link via general intent.");
                 }
 
-                // 1. Immediately invoke BciAccessibilityService to find and click the song item / play button
                 if (BciAccessibilityService.getInstance() != null) {
                     log("Invoking BciAccessibilityService.playSearchedSong for '" + effectiveTitle + "'");
                     BciAccessibilityService.getInstance().playSearchedSong(effectiveTitle);
@@ -822,19 +822,37 @@ public class BciMediaService extends NotificationListenerService {
                     log("BciAccessibilityService instance is null! Fallback to media transport controls.");
                 }
 
-                // Rely solely on BciAccessibilityService clicking the actual song result on screen.
-                // ponytail: DO NOT use TransportControls.play() or KEYCODE_MEDIA_PLAY here â€”
-                // they resume the previously-loaded song, not the newly-searched one.
-
-                publishAck("Right_Search_Playlist", "Deeplink: " + songUrl);
+                publishAck(CMD_SEARCH_PLAYLIST, "Deeplink: " + songUrl);
             } catch (Exception e) {
                 log("Error opening deep link: " + e.getMessage());
-                publishFailedAck("Right_Search_Playlist", "Deeplink error: " + e.getMessage());
+                publishFailedAck(CMD_SEARCH_PLAYLIST, "Deeplink error: " + e.getMessage());
             }
         });
     }
 
-
+    private String extractSongUrlFromJson(JSONObject json) {
+        if (json.has("songs")) {
+            JSONObject songsObj = json.optJSONObject("songs");
+            if (songsObj != null && songsObj.has("data")) {
+                JSONArray data = songsObj.optJSONArray("data");
+                if (data != null && data.length() > 0) {
+                    JSONObject first = data.optJSONObject(0);
+                    if (first != null && first.has("url")) return first.optString("url");
+                }
+            }
+        }
+        if (json.has("topquery")) {
+            JSONObject topObj = json.optJSONObject("topquery");
+            if (topObj != null && topObj.has("data")) {
+                JSONArray data = topObj.optJSONArray("data");
+                if (data != null && data.length() > 0) {
+                    JSONObject first = data.optJSONObject(0);
+                    if (first != null && first.has("url")) return first.optString("url");
+                }
+            }
+        }
+        return null;
+    }
 
     public void searchAndPlaySong(String query) {
         final String cleanQuery = (query != null && !query.trim().isEmpty()) ? query.trim() : DEFAULT_SEARCH_QUERY;
@@ -846,55 +864,28 @@ public class BciMediaService extends NotificationListenerService {
                 String encoded = java.net.URLEncoder.encode(cleanQuery, "UTF-8");
                 String apiUrl = "https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query=" + encoded;
 
-                java.net.URL url = new java.net.URL(apiUrl);
+                java.net.URL url = java.net.URI.create(apiUrl).toURL();
                 conn = (java.net.HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("GET");
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
                 conn.setConnectTimeout(5000);
                 conn.setReadTimeout(5000);
 
-                int responseCode = conn.getResponseCode();
-                if (responseCode == 200) {
+                if (conn.getResponseCode() == 200) {
                     StringBuilder response = new StringBuilder();
                     try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream()))) {
-
-                    String inputLine;
-                    while ((inputLine = in.readLine()) != null) {
-                        response.append(inputLine);
-                    }
+                        String inputLine;
+                        while ((inputLine = in.readLine()) != null) {
+                            response.append(inputLine);
+                        }
                     }
 
                     JSONObject json = new JSONObject(response.toString());
-                    String songUrl = null;
-                    String songTitle = cleanQuery;
-
-                    if (json.has("songs")) {
-                        JSONObject songsObj = json.optJSONObject("songs");
-                        if (songsObj != null && songsObj.has("data")) {
-                            JSONArray data = songsObj.optJSONArray("data");
-                            if (data != null && data.length() > 0) {
-                                JSONObject firstSong = data.getJSONObject(0);
-                                songUrl = firstSong.optString("url", null);
-                                songTitle = firstSong.optString("title", cleanQuery);
-                            }
-                        }
-                    }
-
-                    if ((songUrl == null || songUrl.isEmpty()) && json.has("topquery")) {
-                        JSONObject topObj = json.optJSONObject("topquery");
-                        if (topObj != null && topObj.has("data")) {
-                            JSONArray data = topObj.optJSONArray("data");
-                            if (data != null && data.length() > 0) {
-                                JSONObject firstSong = data.getJSONObject(0);
-                                songUrl = firstSong.optString("url", null);
-                                songTitle = firstSong.optString("title", cleanQuery);
-                            }
-                        }
-                    }
+                    String songUrl = extractSongUrlFromJson(json);
 
                     if (songUrl != null && !songUrl.isEmpty()) {
-                        log("JioSaavn resolved: '" + songTitle + "' -> " + songUrl);
-                        openJioSaavnDeeplink(songUrl, songTitle);
+                        log("JioSaavn resolved: '" + cleanQuery + "' -> " + songUrl);
+                        openJioSaavnDeeplink(songUrl, cleanQuery);
                     } else {
                         log("JioSaavn search: No results found for '" + cleanQuery + "'");
                         if (BciAccessibilityService.getInstance() != null) {
@@ -902,7 +893,7 @@ public class BciMediaService extends NotificationListenerService {
                         }
                     }
                 } else {
-                    log("JioSaavn API HTTP error: " + responseCode);
+                    log("JioSaavn API HTTP error: " + conn.getResponseCode());
                 }
             } catch (Exception e) {
                 log("searchAndPlaySong error: " + e.getMessage());
@@ -911,159 +902,125 @@ public class BciMediaService extends NotificationListenerService {
                 }
             } finally {
                 if (conn != null) {
-                    try { conn.disconnect(); } catch (Exception ignored) {}
+                    try {
+                        conn.disconnect();
+                    } catch (Exception ignored) {
+                        // Ignored error on connection disconnect
+                    }
                 }
             }
         }).start();
     }
 
-    private void translateBrainwaveToMedia(String officialCommand, String query, String songUrl, String title) {
-        if (officialCommand == null || officialCommand.trim().isEmpty()) return;
-
-        final String effectiveTitle = (title != null && !title.trim().isEmpty()) ? title.trim() : query;
-        log("Translating command: " + officialCommand + (query.isEmpty() ? "" : " with query: " + query) + (!effectiveTitle.isEmpty() ? " with title: " + effectiveTitle : "") + (songUrl != null && !songUrl.isEmpty() ? " with url: " + songUrl : ""));
-
-        // â”€â”€ Volume: AudioManager always works universally â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        if (officialCommand.equals("Right_Volume_Up") || officialCommand.equals("Right_Volume_Down")) {
-            handleVolume(officialCommand);
-            return;
-        }
-
-        // â”€â”€ Close JioSaavn / Return to Home â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        if (officialCommand.equals("Right_Close_App")
-                || officialCommand.equals("Right_Return_to_Home")
-                || officialCommand.equals("Drop")) {
-            log("Close JioSaavn command received. Pausing playback and closing JioSaavn...");
-            pausePlaybackIfPlaying();
-            if (BciAccessibilityService.getInstance() != null) {
-                log("Closing JioSaavn via AccessibilityService...");
-                BciAccessibilityService.getInstance().closeJioSaavn();
-            } else {
-                log("AccessibilityService unavailable. Sending HOME intent fallback...");
-                try {
-                    Intent homeIntent = new Intent(Intent.ACTION_MAIN);
-                    homeIntent.addCategory(Intent.CATEGORY_HOME);
-                    homeIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(homeIntent);
-                } catch (Exception e) {
-                    log("Failed to send HOME intent: " + e.getMessage());
-                }
-            }
-            publishAck(officialCommand);
-            return;
-        }
-
-        // â”€â”€ Launch JioSaavn â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        if (officialCommand.equals("Right_JioSaavn")) {
-            log("JioSaavn launch command received. Ensuring foreground...");
-            ensureJioSaavnForeground();
-            publishAck(officialCommand);
-            return;
-        }
-
-        // â”€â”€ Search Playlist / type_query / SEARCH â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        if (officialCommand.equals("Right_Search_Playlist") || officialCommand.equals("type_query") || officialCommand.equals("SEARCH")) {
-            if (songUrl != null && !songUrl.trim().isEmpty()) {
-                log("Search received with deep link URL: " + songUrl + ", title: " + effectiveTitle);
-                openJioSaavnDeeplink(songUrl, effectiveTitle);
-                return;
-            }
-            String effectiveQuery = (query != null && !query.trim().isEmpty()) ? query.trim() : DEFAULT_SEARCH_QUERY;
-            log("Search received with query: '" + effectiveQuery + "'. Resolving URL...");
-            searchAndPlaySong(effectiveQuery);
-            return;
-        }
-
-        // â”€â”€ Play / Pause / Next / Previous â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
-        // â”€â”€ Capture state BEFORE execution for post-verification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        final int preState = capturePlaybackState();
-        final long prePosition = captureQueuePosition();
-        log("Pre-execution state capture: PlaybackState=" + preState + ", Position=" + prePosition);
-
-        // â”€â”€ TIER 1: Direct MediaController (Universal & Brand-safe) â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        log("Tier 1: Searching for JioSaavn active MediaController...");
-        // Check for active background session first. If none exists, ensure foreground and retry.
-        MediaController controller = findJioSaavnController(1, 0);
-        if (controller == null) {
-            log("Tier 1: No active background session found. Ensuring JioSaavn is foregrounded...");
-            ensureJioSaavnForeground();
-            controller = findJioSaavnController(2, 300);
-        }
-
-        if (controller != null) {
-            try {
-                switch (officialCommand) {
-                    case "Right_Play_Pause": {
-                        PlaybackState state = controller.getPlaybackState();
-                        boolean isPlaying = state != null
-                            && state.getState() == PlaybackState.STATE_PLAYING;
-                        if (isPlaying) {
-                            controller.getTransportControls().pause();
-                            log("Tier 1: MediaController.pause() sent to JioSaavn.");
-                        } else {
-                            controller.getTransportControls().play();
-                            log("Tier 1: MediaController.play() sent to JioSaavn.");
-                        }
-                        // Post-execution verification after 500ms
-                        verifyPlaybackStateChange(officialCommand, preState, "Tier 1: MediaController");
-                        return;
-                    }
-                    case "Right_Next_Song":
-                        controller.getTransportControls().skipToNext();
-                        log("Tier 1: MediaController.skipToNext() sent to JioSaavn.");
-                        verifyTrackChange(officialCommand, prePosition, "Tier 1: MediaController");
-                        return;
-
-                    case "Right_Previous_Song":
-                        controller.getTransportControls().skipToPrevious();
-                        log("Tier 1: MediaController.skipToPrevious() sent to JioSaavn.");
-                        verifyTrackChange(officialCommand, prePosition, "Tier 1: MediaController");
-                        return;
-                }
-            } catch (Exception e) {
-                log("Tier 1 MediaController call failed: " + e.getMessage() + ". Falling back to Tier 2...");
-            }
-        }
-
-        // â”€â”€ TIER 2: Accessibility UI Click Fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        log("Tier 2: Attempting Accessibility UI Click Fallback...");
+    private void handleCloseApp(String officialCommand) {
+        log("Close JioSaavn command received. Pausing playback and closing JioSaavn...");
+        pausePlaybackIfPlaying();
         if (BciAccessibilityService.getInstance() != null) {
-            boolean result = false;
-            switch (officialCommand) {
-                case "Right_Play_Pause":
-                    result = BciAccessibilityService.getInstance().clickPlayPause();
-                    if (result) verifyPlaybackStateChange(officialCommand, preState, "Tier 2: Accessibility UI");
-                    break;
-                case "Right_Next_Song":
-                    result = BciAccessibilityService.getInstance().clickNextSong();
-                    if (result) verifyTrackChange(officialCommand, prePosition, "Tier 2: Accessibility UI");
-                    break;
-                case "Right_Previous_Song":
-                    result = BciAccessibilityService.getInstance().clickPreviousSong();
-                    if (result) verifyTrackChange(officialCommand, prePosition, "Tier 2: Accessibility UI");
-                    break;
-            }
-            if (result) return;
+            log("Closing JioSaavn via AccessibilityService...");
+            BciAccessibilityService.getInstance().closeJioSaavn();
         } else {
-            log("Tier 2: Accessibility Service not available.");
+            log("AccessibilityService unavailable. Sending HOME intent fallback...");
+            try {
+                Intent homeIntent = new Intent(Intent.ACTION_MAIN);
+                homeIntent.addCategory(Intent.CATEGORY_HOME);
+                homeIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(homeIntent);
+            } catch (Exception e) {
+                log("Failed to send HOME intent: " + e.getMessage());
+            }
         }
+        publishAck(officialCommand);
+    }
 
-        // â”€â”€ TIER 3: AudioManager KeyEvent Dispatch Fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    private void handleSearchCommand(String query, String songUrl, String title) {
+        if (songUrl != null && !songUrl.trim().isEmpty()) {
+            log("Search received with deep link URL: " + songUrl + ", title: " + title);
+            openJioSaavnDeeplink(songUrl, title);
+            return;
+        }
+        String effectiveQuery = (query != null && !query.trim().isEmpty()) ? query.trim() : DEFAULT_SEARCH_QUERY;
+        log("Search received with query: '" + effectiveQuery + "'. Resolving URL...");
+        searchAndPlaySong(effectiveQuery);
+    }
+
+    private boolean executeMediaTier1(MediaController controller, String officialCommand, int preState, long prePosition) {
+        try {
+            switch (officialCommand) {
+                case CMD_PLAY_PAUSE: {
+                    PlaybackState state = controller.getPlaybackState();
+                    boolean isPlaying = state != null && state.getState() == PlaybackState.STATE_PLAYING;
+                    if (isPlaying) {
+                        controller.getTransportControls().pause();
+                        log("Tier 1: MediaController.pause() sent to JioSaavn.");
+                    } else {
+                        controller.getTransportControls().play();
+                        log("Tier 1: MediaController.play() sent to JioSaavn.");
+                    }
+                    verifyPlaybackStateChange(officialCommand, preState, TIER_MEDIA_CONTROLLER);
+                    return true;
+                }
+                case CMD_NEXT_SONG:
+                    controller.getTransportControls().skipToNext();
+                    log("Tier 1: MediaController.skipToNext() sent to JioSaavn.");
+                    verifyTrackChange(officialCommand, prePosition, TIER_MEDIA_CONTROLLER);
+                    return true;
+
+                case CMD_PREVIOUS_SONG:
+                    controller.getTransportControls().skipToPrevious();
+                    log("Tier 1: MediaController.skipToPrevious() sent to JioSaavn.");
+                    verifyTrackChange(officialCommand, prePosition, TIER_MEDIA_CONTROLLER);
+                    return true;
+
+                default:
+                    log("Tier 1: Unsupported command for MediaController: " + officialCommand);
+                    return false;
+            }
+        } catch (Exception e) {
+            log("Tier 1 MediaController call failed: " + e.getMessage() + ". Falling back to Tier 2...");
+            return false;
+        }
+    }
+
+    private boolean executeMediaTier2(String officialCommand, int preState, long prePosition) {
+        if (BciAccessibilityService.getInstance() == null) {
+            log("Tier 2: Accessibility Service not available.");
+            return false;
+        }
+        boolean result = false;
+        switch (officialCommand) {
+            case CMD_PLAY_PAUSE:
+                result = BciAccessibilityService.getInstance().clickPlayPause();
+                if (result) verifyPlaybackStateChange(officialCommand, preState, TIER_ACCESSIBILITY_UI);
+                break;
+            case CMD_NEXT_SONG:
+                result = BciAccessibilityService.getInstance().clickNextSong();
+                if (result) verifyTrackChange(officialCommand, prePosition, TIER_ACCESSIBILITY_UI);
+                break;
+            case CMD_PREVIOUS_SONG:
+                result = BciAccessibilityService.getInstance().clickPreviousSong();
+                if (result) verifyTrackChange(officialCommand, prePosition, TIER_ACCESSIBILITY_UI);
+                break;
+            default:
+                log("Tier 2: Unsupported command for Accessibility: " + officialCommand);
+                break;
+        }
+        return result;
+    }
+
+    private void executeMediaTier3(String officialCommand, int preState, long prePosition) {
         log("Tier 3: JioSaavn session and UI click failed. Using AudioManager.dispatchMediaKeyEvent...");
         switch (officialCommand) {
-            case "Right_Play_Pause":
-                dispatchMediaKeyFallback(android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
-                verifyPlaybackStateChange(officialCommand, preState, "Tier 3: AudioManager KeyEvent");
+            case CMD_PLAY_PAUSE:
+                dispatchMediaKeyFallback(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
+                verifyPlaybackStateChange(officialCommand, preState, TIER_AUDIO_MANAGER);
                 break;
-            case "Right_Next_Song":
-                dispatchMediaKeyFallback(android.view.KeyEvent.KEYCODE_MEDIA_NEXT);
-                verifyTrackChange(officialCommand, prePosition, "Tier 3: AudioManager KeyEvent");
+            case CMD_NEXT_SONG:
+                dispatchMediaKeyFallback(KeyEvent.KEYCODE_MEDIA_NEXT);
+                verifyTrackChange(officialCommand, prePosition, TIER_AUDIO_MANAGER);
                 break;
-            case "Right_Previous_Song":
-                dispatchMediaKeyFallback(android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS);
-                verifyTrackChange(officialCommand, prePosition, "Tier 3: AudioManager KeyEvent");
+            case CMD_PREVIOUS_SONG:
+                dispatchMediaKeyFallback(KeyEvent.KEYCODE_MEDIA_PREVIOUS);
+                verifyTrackChange(officialCommand, prePosition, TIER_AUDIO_MANAGER);
                 break;
             default:
                 log("No handler for command: " + officialCommand);
@@ -1072,23 +1029,62 @@ public class BciMediaService extends NotificationListenerService {
         }
     }
 
-    /**
-     * Post-execution verification for Play/Pause.
-     * Waits 500ms, then re-checks PlaybackState to confirm the state actually toggled.
-     * Publishes EXECUTED if state changed, FAILED if it didn't (OS silently dropped the call).
-     */
-    private void verifyPlaybackStateChange(String command, int preState, String tierName) {
-        try {
-            Thread.sleep(500);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+    private void translateBrainwaveToMedia(String officialCommand, String query, String songUrl, String title) {
+        if (officialCommand == null || officialCommand.trim().isEmpty()) return;
+
+        final String effectiveTitle = (title != null && !title.trim().isEmpty()) ? title.trim() : query;
+        log("Translating command: " + officialCommand + (query.isEmpty() ? "" : " with query: " + query));
+
+        if (officialCommand.equals(CMD_VOLUME_UP) || officialCommand.equals("Right_Volume_Down")) {
+            handleVolume(officialCommand);
+            return;
         }
+
+        if (officialCommand.equals("Right_Close_App") || officialCommand.equals("Right_Return_to_Home") || officialCommand.equals("Drop")) {
+            handleCloseApp(officialCommand);
+            return;
+        }
+
+        if (officialCommand.equals("Right_JioSaavn")) {
+            log("JioSaavn launch command received. Ensuring foreground...");
+            ensureJioSaavnForeground();
+            publishAck(officialCommand);
+            return;
+        }
+
+        if (officialCommand.equals(CMD_SEARCH_PLAYLIST) || officialCommand.equals("type_query") || officialCommand.equals(CMD_SEARCH)) {
+            handleSearchCommand(query, songUrl, effectiveTitle);
+            return;
+        }
+
+        final int preState = capturePlaybackState();
+        final long prePosition = captureQueuePosition();
+        log("Pre-execution state capture: PlaybackState=" + preState + ", Position=" + prePosition);
+
+        MediaController controller = findJioSaavnController(1, 0);
+        if (controller == null) {
+            ensureJioSaavnForeground();
+            controller = findJioSaavnController(2, 300);
+        }
+
+        if (controller != null && executeMediaTier1(controller, officialCommand, preState, prePosition)) {
+            return;
+        }
+
+        if (executeMediaTier2(officialCommand, preState, prePosition)) {
+            return;
+        }
+
+        executeMediaTier3(officialCommand, preState, prePosition);
+    }
+
+    private void verifyPlaybackStateChange(String command, int preState, String tierName) {
+        sleepQuietly(500);
 
         int postState = capturePlaybackState();
         log("Post-execution verification: PreState=" + preState + ", PostState=" + postState);
 
         if (preState == -1 || postState == -1) {
-            // Cannot verify (no MediaController available), assume success
             log("Verification SKIPPED (no PlaybackState available). Assuming success.");
             publishAck(command, tierName);
         } else if (preState != postState) {
@@ -1100,23 +1096,13 @@ public class BciMediaService extends NotificationListenerService {
         }
     }
 
-    /**
-     * Post-execution verification for Next/Previous track.
-     * Waits 500ms, then re-checks playback position to confirm track actually changed.
-     * Publishes EXECUTED if position changed, FAILED if it didn't.
-     */
     private void verifyTrackChange(String command, long prePosition, String tierName) {
-        try {
-            Thread.sleep(500);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        sleepQuietly(500);
 
         long postPosition = captureQueuePosition();
         log("Post-execution verification: PrePosition=" + prePosition + ", PostPosition=" + postPosition);
 
         if (prePosition == -1 || postPosition == -1) {
-            // Cannot verify (no MediaController available), assume success
             log("Verification SKIPPED (no position data available). Assuming success.");
             publishAck(command, tierName);
         } else if (prePosition != postPosition) {
@@ -1128,48 +1114,30 @@ public class BciMediaService extends NotificationListenerService {
         }
     }
 
-    /**
-     * Handles volume up/down using a robust 3-tier approach:
-     * Tier 1 – In-app JioSaavn UI volume slider via Accessibility Service
-     * Tier 2 – Direct MediaButton KeyEvent Injection into JioSaavn's MediaController
-     * Tier 3 – Hardware STREAM_MUSIC Volume State Management (AudioManager.setStreamVolume)
-     */
-    private void handleVolume(String officialCommand) {
-        log("handleVolume invoked for: " + officialCommand);
-        boolean isVolumeUp = officialCommand.equals("Right_Volume_Up");
-
-        // Capture initial volume state for post-execution verification
-        AudioManager amCapture = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        int initialVolume = (amCapture != null) ? amCapture.getStreamVolume(AudioManager.STREAM_MUSIC) : -1;
-        log("Volume Pre-Capture: initialVolume=" + initialVolume);
-
-        // ── Tier 1: In-app JioSaavn UI volume slider via Accessibility Service (Primary) ──
+    private boolean executeVolumeTier1(String officialCommand, int initialVolume) {
         log("Volume Control: Attempting Tier 1 (JioSaavn UI Volume Slider)...");
         if (tryAccessibilityVolume(officialCommand)) {
             if (verifyVolumeChange(officialCommand, initialVolume, "Tier 1: JioSaavn UI Volume Slider")) {
-                return;
+                return true;
             }
             log("Volume Control: Tier 1 executed but volume unchanged. Falling back to Tier 2...");
         } else {
             log("Volume Control: Tier 1 FAILED. Falling back to Tier 2...");
         }
+        return false;
+    }
 
-        // Re-capture volume
-        initialVolume = (amCapture != null) ? amCapture.getStreamVolume(AudioManager.STREAM_MUSIC) : -1;
-
-        // ── Tier 2: Direct MediaButton KeyEvent Injection into JioSaavn's MediaController ──
+    private boolean executeVolumeTier2(String officialCommand, int initialVolume, boolean isVolumeUp) {
         log("Volume Control: Attempting Tier 2 (MediaController Direct KeyEvent)...");
         MediaController controller = findJioSaavnController(1, 0);
         if (controller != null) {
             try {
-                int keyCode = isVolumeUp ? android.view.KeyEvent.KEYCODE_VOLUME_UP : android.view.KeyEvent.KEYCODE_VOLUME_DOWN;
-                android.view.KeyEvent down = new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, keyCode);
-                android.view.KeyEvent up = new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, keyCode);
-                controller.dispatchMediaButtonEvent(down);
-                controller.dispatchMediaButtonEvent(up);
+                int keyCode = isVolumeUp ? KeyEvent.KEYCODE_VOLUME_UP : KeyEvent.KEYCODE_VOLUME_DOWN;
+                controller.dispatchMediaButtonEvent(new KeyEvent(KeyEvent.ACTION_DOWN, keyCode));
+                controller.dispatchMediaButtonEvent(new KeyEvent(KeyEvent.ACTION_UP, keyCode));
                 log("Volume Control: MediaController KeyEvent dispatched.");
                 if (verifyVolumeChange(officialCommand, initialVolume, "Tier 2: MediaController Direct KeyEvent")) {
-                    return;
+                    return true;
                 }
                 log("Volume Control: Tier 2 executed but volume unchanged. Falling back to Tier 3...");
             } catch (Exception e) {
@@ -1178,11 +1146,10 @@ public class BciMediaService extends NotificationListenerService {
         } else {
             log("Volume Control: Tier 2 FAILED (no controller). Falling back to Tier 3...");
         }
+        return false;
+    }
 
-        // Re-capture volume
-        initialVolume = (amCapture != null) ? amCapture.getStreamVolume(AudioManager.STREAM_MUSIC) : -1;
-
-        // ── Tier 3: Hardware STREAM_MUSIC Volume State Management (Fallback only) ──
+    private boolean executeVolumeTier3(String officialCommand, int initialVolume, boolean isVolumeUp) {
         log("Volume Control: Attempting Tier 3 (Hardware STREAM_MUSIC Volume Fallback)...");
         AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         if (am != null) {
@@ -1195,58 +1162,76 @@ public class BciMediaService extends NotificationListenerService {
                 am.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, AudioManager.FLAG_SHOW_UI);
                 log("Volume Control: Tier 3 set volume to " + targetVol + "/" + maxVol);
                 if (verifyVolumeChange(officialCommand, initialVolume, "Tier 3: Hardware STREAM_MUSIC Volume")) {
-                    return;
+                    return true;
                 }
             } catch (Exception e) {
                 log("Volume Control: Tier 3 Exception: " + e.getMessage());
             }
         }
+        return false;
+    }
+
+    private void handleVolume(String officialCommand) {
+        log("handleVolume invoked for: " + officialCommand);
+        boolean isVolumeUp = officialCommand.equals(CMD_VOLUME_UP);
+
+        AudioManager amCapture = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        int initialVolume = (amCapture != null) ? amCapture.getStreamVolume(AudioManager.STREAM_MUSIC) : -1;
+        log("Volume Pre-Capture: initialVolume=" + initialVolume);
+
+        if (executeVolumeTier1(officialCommand, initialVolume)) {
+            return;
+        }
+
+        initialVolume = (amCapture != null) ? amCapture.getStreamVolume(AudioManager.STREAM_MUSIC) : -1;
+        if (executeVolumeTier2(officialCommand, initialVolume, isVolumeUp)) {
+            return;
+        }
+
+        initialVolume = (amCapture != null) ? amCapture.getStreamVolume(AudioManager.STREAM_MUSIC) : -1;
+        if (executeVolumeTier3(officialCommand, initialVolume, isVolumeUp)) {
+            return;
+        }
 
         publishFailedAck(officialCommand, "All volume tiers exhausted without success");
     }
 
-/**
- * Post-execution verification for volume changes.
- * Waits 400ms, re-reads volume, and publishes EXECUTED if changed, returns false if not.
- */
-private boolean verifyVolumeChange(String command, int initialVolume, String tierName) {
-    try { Thread.sleep(400); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    private boolean verifyVolumeChange(String command, int initialVolume, String tierName) {
+        sleepQuietly(400);
 
-    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-    if (am == null) {
-        log("Volume verification: AudioManager null. Assuming success.");
-        publishAck(command, tierName);
-        return true;
+        AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) {
+            log("Volume verification: AudioManager null. Assuming success.");
+            publishAck(command, tierName);
+            return true;
+        }
+
+        int postVolume = am.getStreamVolume(AudioManager.STREAM_MUSIC);
+        log("Volume Post-Verification: initial=" + initialVolume + ", post=" + postVolume);
+
+        if (initialVolume == -1) {
+            log("Volume verification SKIPPED (no initial capture). Assuming success.");
+            publishAck(command, tierName);
+            return true;
+        }
+
+        if (postVolume != initialVolume) {
+            log("Volume Verification PASSED: " + initialVolume + " -> " + postVolume);
+            publishAck(command, tierName);
+            return true;
+        } else {
+            log("Volume Verification FAILED: volume still " + postVolume + " (" + tierName + ")");
+            return false;
+        }
     }
 
-    int postVolume = am.getStreamVolume(AudioManager.STREAM_MUSIC);
-    log("Volume Post-Verification: initial=" + initialVolume + ", post=" + postVolume);
-
-    if (initialVolume == -1) {
-        // Could not capture initial, assume success
-        log("Volume verification SKIPPED (no initial capture). Assuming success.");
-        publishAck(command, tierName);
-        return true;
-    }
-
-    if (postVolume != initialVolume) {
-        log("Volume Verification PASSED: " + initialVolume + " -> " + postVolume);
-        publishAck(command, tierName);
-        return true;
-    } else {
-        log("Volume Verification FAILED: volume still " + postVolume + " (" + tierName + ")");
-        return false;
-    }
-}
-
-    /** Attempts in-app JioSaavn volume slider UI manipulation via BciAccessibilityService (Tier 1). */
     private boolean tryAccessibilityVolume(String command) {
         if (BciAccessibilityService.getInstance() == null) {
             log("Tier 1: AccessibilityService instance is null/disabled.");
             return false;
         }
         try {
-            boolean isVolumeUp = command.equals("Right_Volume_Up");
+            boolean isVolumeUp = command.equals(CMD_VOLUME_UP);
             boolean result = BciAccessibilityService.getInstance().adjustJioSaavnVolumeUi(isVolumeUp);
             log("Tier 1: Accessibility UI volume slider adjust returned = " + result);
             return result;
@@ -1263,7 +1248,6 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
         }
     }
 
-    /** Fallback: dispatch media key events via AudioManager when MediaController is unavailable. */
     private void dispatchMediaKeyFallback(int keyCode) {
         try {
             AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
@@ -1271,10 +1255,8 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
                 log("AudioManager null in dispatchMediaKeyFallback");
                 return;
             }
-            android.view.KeyEvent down = new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, keyCode);
-            android.view.KeyEvent up = new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, keyCode);
-            am.dispatchMediaKeyEvent(down);
-            am.dispatchMediaKeyEvent(up);
+            am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, keyCode));
+            am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, keyCode));
             log("dispatchMediaKeyFallback: dispatched keycode=" + keyCode);
         } catch (Exception e) {
             log("dispatchMediaKeyFallback failed: " + e.getMessage());
@@ -1285,8 +1267,8 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
         return JIOSAAVN_PACKAGE_BEATS.equals(pkg) || JIOSAAVN_PACKAGE_SAAVN.equals(pkg);
     }
 
-    private void setupMediaSessionListeners() {
-        mediaCallback = new MediaController.Callback() {
+    private MediaController.Callback createMediaCallback() {
+        return new MediaController.Callback() {
             @Override
             public void onPlaybackStateChanged(PlaybackState state) {
                 if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
@@ -1306,14 +1288,18 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
                             Object val = metadata.getString(key);
                             if (val == null) val = metadata.getLong(key);
                             Log.d(TAG, "Metadata: " + key + " = " + val);
-                        } catch (Exception ignored) {}
+                        } catch (Exception ignored) {
+                            // Ignored non-string non-long metadata value
+                        }
                     }
                 }
                 publishMediaUpdate();
             }
         };
+    }
 
-        sessionsChangedListener = controllers -> {
+    private MediaSessionManager.OnActiveSessionsChangedListener createSessionsChangedListener() {
+        return controllers -> {
             MediaController jioController = null;
             if (controllers != null) {
                 for (MediaController controller : controllers) {
@@ -1325,12 +1311,16 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
             }
             updateActiveController(jioController);
         };
+    }
+
+    private void setupMediaSessionListeners() {
+        mediaCallback = createMediaCallback();
+        sessionsChangedListener = createSessionsChangedListener();
 
         MediaSessionManager sessionManager = (MediaSessionManager) getSystemService(Context.MEDIA_SESSION_SERVICE);
         if (sessionManager != null) {
             ComponentName listenerComponent = new ComponentName(this, BciMediaService.class);
             sessionManager.addOnActiveSessionsChangedListener(sessionsChangedListener, listenerComponent);
-            // Initial check
             try {
                 List<MediaController> controllers = sessionManager.getActiveSessions(listenerComponent);
                 sessionsChangedListener.onActiveSessionsChanged(controllers);
@@ -1397,7 +1387,7 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
             if (notification != null && notification.extras != null) {
                 String title = notification.extras.getString(Notification.EXTRA_TITLE);
                 String artist = notification.extras.getString(Notification.EXTRA_TEXT);
-                
+
                 if (title != null && !title.isEmpty()) {
                     log("Notification Extraction: " + title + " - " + artist);
                     publishMediaUpdate(title, artist, sbn.getPackageName());
@@ -1406,8 +1396,76 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
         }
     }
 
-    private void publishMediaUpdate() {
+    public void publishMediaUpdate() {
         publishMediaUpdate(null, null, null);
+    }
+
+    private void extractMetadataFields(MediaMetadata metadata) {
+        String[] titleKeys = {
+            MediaMetadata.METADATA_KEY_TITLE, "android.media.metadata.TITLE", "title", "track", "song", "song_name"
+        };
+        for (String key : titleKeys) {
+            String title = metadata.getString(key);
+            if (title != null && !title.isEmpty()) {
+                lastKnownTitle = title;
+                break;
+            }
+        }
+
+        String[] artistKeys = {
+            MediaMetadata.METADATA_KEY_ARTIST, "android.media.metadata.ARTIST", "artist", "artist_name", "singers"
+        };
+        for (String key : artistKeys) {
+            String artist = metadata.getString(key);
+            if (artist != null && !artist.isEmpty()) {
+                lastKnownArtist = artist;
+                break;
+            }
+        }
+
+        String[] artKeys = {
+            MediaMetadata.METADATA_KEY_ALBUM_ART_URI, MediaMetadata.METADATA_KEY_ART_URI,
+            "android.media.metadata.ALBUM_ART_URI", "android.media.metadata.ART_URI", "album_art_uri"
+        };
+        for (String key : artKeys) {
+            String art = metadata.getString(key);
+            if (art != null && !art.isEmpty()) {
+                lastKnownAlbumArt = art;
+                break;
+            }
+        }
+    }
+
+    private void extractProgressFields(PlaybackState state, MediaMetadata metadata, JSONObject payload) throws Exception {
+        String currentTime = "0:00";
+        String totalTime = "0:00";
+        int progressPercent = 0;
+
+        if (state != null && metadata != null) {
+            long currentPos = state.getPosition();
+            long duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
+            currentTime = formatTime(currentPos);
+            totalTime = formatTime(duration);
+            if (duration > 0) {
+                progressPercent = (int) ((currentPos * 100) / duration);
+            }
+        }
+        payload.put("current_time", currentTime);
+        payload.put("total_time", totalTime);
+        payload.put("progress_percent", progressPercent);
+    }
+
+    private void extractVolumeField(JSONObject payload) throws Exception {
+        int volumePercent = 0;
+        AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager != null) {
+            int volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+            int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            if (maxVolume > 0) {
+                volumePercent = (int) ((volume * 100.0) / maxVolume);
+            }
+        }
+        payload.put("volume", volumePercent);
     }
 
     private void publishMediaUpdate(String overrideTitle, String overrideArtist, String overridePackage) {
@@ -1429,51 +1487,10 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
             payload.put("source_app", lastKnownPackage);
 
             if (metadata != null) {
-                String title = null;
-                String[] titleKeys = {
-                    MediaMetadata.METADATA_KEY_TITLE,
-                    "android.media.metadata.TITLE",
-                    "title",
-                    "track",
-                    "song",
-                    "song_name"
-                };
-                for (String key : titleKeys) {
-                    title = metadata.getString(key);
-                    if (title != null && !title.isEmpty()) break;
-                }
-                if (title != null) lastKnownTitle = title;
-
-                String artist = null;
-                String[] artistKeys = {
-                    MediaMetadata.METADATA_KEY_ARTIST,
-                    "android.media.metadata.ARTIST",
-                    "artist",
-                    "artist_name",
-                    "singers"
-                };
-                for (String key : artistKeys) {
-                    artist = metadata.getString(key);
-                    if (artist != null && !artist.isEmpty()) break;
-                }
-                if (artist != null) lastKnownArtist = artist;
-
-                String art = null;
-                String[] artKeys = {
-                    MediaMetadata.METADATA_KEY_ALBUM_ART_URI,
-                    MediaMetadata.METADATA_KEY_ART_URI,
-                    "android.media.metadata.ALBUM_ART_URI",
-                    "android.media.metadata.ART_URI",
-                    "album_art_uri"
-                };
-                for (String key : artKeys) {
-                    art = metadata.getString(key);
-                    if (art != null && !art.isEmpty()) break;
-                }
-                lastKnownAlbumArt = (art != null) ? art : "";
+                extractMetadataFields(metadata);
             }
 
-            payload.put("title", lastKnownTitle);
+            payload.put(KEY_TITLE, lastKnownTitle);
             payload.put("artist", lastKnownArtist);
             payload.put("album_art", lastKnownAlbumArt);
 
@@ -1481,69 +1498,51 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
             if (state != null) {
                 status = (state.getState() == PlaybackState.STATE_PLAYING) ? "Playing" : "Paused";
             } else if (overrideTitle != null) {
-                status = "Playing"; // If triggered by notification, assume playing
+                status = "Playing";
             }
-            payload.put("status", status);
+            payload.put(KEY_STATUS, status);
 
-            // Progress and Time
-            String currentTime = "0:00";
-            String totalTime = "0:00";
-            int progressPercent = 0;
+            extractProgressFields(state, metadata, payload);
+            extractVolumeField(payload);
 
-            if (state != null && metadata != null) {
-                long currentPos = state.getPosition();
-                long duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION);
-                currentTime = formatTime(currentPos);
-                totalTime = formatTime(duration);
-                if (duration > 0) {
-                    progressPercent = (int) ((currentPos * 100) / duration);
-                }
-            }
-            payload.put("current_time", currentTime);
-            payload.put("total_time", totalTime);
-            payload.put("progress_percent", progressPercent);
+            updateUiDisplay(status, payload.optString("current_time"), payload.optString("total_time"),
+                    payload.optInt("progress_percent"), payload.optInt("volume"));
 
-            // Volume
-            int volumePercent = 0;
-            AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-            if (audioManager != null) {
-                int volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
-                int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-                if (maxVolume > 0) {
-                    volumePercent = (int) ((volume * 100.0) / maxVolume);
-                }
-            }
-            payload.put("volume", volumePercent);
-
-            if (MainActivity.getInstance() != null) {
-                final String fTitle = lastKnownTitle;
-                final String fArtist = lastKnownArtist;
-                final String fStatus = status;
-                final String fCurrent = currentTime;
-                final String fTotal = totalTime;
-                final int fProg = progressPercent;
-                final int fVol = volumePercent;
-                MainActivity.getInstance().runOnUiThread(() -> {
-                    MainActivity.getInstance().updateMediaDisplay(fTitle, fArtist, fStatus, fCurrent, fTotal, fProg, fVol);
-                });
-            }
-
-            boolean mediaStateChanged = !java.util.Objects.equals(lastPublishedMqttTitle, lastKnownTitle)
-                    || !java.util.Objects.equals(lastPublishedMqttArtist, lastKnownArtist)
-                    || !java.util.Objects.equals(lastPublishedMqttStatus, status);
-
-            if (mediaStateChanged && mqttClient != null && mqttClient.isConnected()) {
-                lastPublishedMqttTitle = lastKnownTitle;
-                lastPublishedMqttArtist = lastKnownArtist;
-                lastPublishedMqttStatus = status;
-
-                MqttMessage message = new MqttMessage(payload.toString().getBytes());
-                message.setQos(1);
-                publishMqttAsync(getMediaTopic(), message);
-                Log.d(TAG, "Media Update Published: " + lastKnownTitle);
-            }
+            checkAndPublishMqttMedia(status, payload);
         } catch (Exception e) {
             Log.e(TAG, "Failed to update media telemetry", e);
+        }
+    }
+
+    private void updateUiDisplay(String status, String currentTime, String totalTime, int progressPercent, int volumePercent) {
+        if (MainActivity.getInstance() != null) {
+            final String fTitle = lastKnownTitle;
+            final String fArtist = lastKnownArtist;
+            final String fStatus = status;
+            final String fCurrent = currentTime;
+            final String fTotal = totalTime;
+            final int fProg = progressPercent;
+            final int fVol = volumePercent;
+            MainActivity.getInstance().runOnUiThread(() ->
+                MainActivity.getInstance().updateMediaDisplay(fTitle, fArtist, fStatus, fCurrent, fTotal, fProg, fVol)
+            );
+        }
+    }
+
+    private void checkAndPublishMqttMedia(String status, JSONObject payload) {
+        boolean mediaStateChanged = !java.util.Objects.equals(lastPublishedMqttTitle, lastKnownTitle)
+                || !java.util.Objects.equals(lastPublishedMqttArtist, lastKnownArtist)
+                || !java.util.Objects.equals(lastPublishedMqttStatus, status);
+
+        if (mediaStateChanged && mqttClient != null && mqttClient.isConnected()) {
+            lastPublishedMqttTitle = lastKnownTitle;
+            lastPublishedMqttArtist = lastKnownArtist;
+            lastPublishedMqttStatus = status;
+
+            MqttMessage message = new MqttMessage(payload.toString().getBytes());
+            message.setQos(1);
+            publishMqttAsync(getMediaTopic(), message);
+            Log.d(TAG, "Media Update Published: " + lastKnownTitle);
         }
     }
 
@@ -1555,14 +1554,13 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
                     if (controller != null) {
                         updateActiveController(controller);
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                    // Ignored controller acquisition failure
+                }
             }
             publishMediaUpdate();
         }).start();
     }
-
-    private String deviceType = "android";
-    private String deviceId = "";
 
     public void loadDeviceUsername() {
         try {
@@ -1595,10 +1593,18 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
         updateDeviceUsername(newUsername, newDeviceType, null);
     }
 
+    private void unsubscribeQuietly(String topic) {
+        if (mqttClient != null && topic != null && !topic.contains("//")) {
+            try {
+                mqttClient.unsubscribe(topic);
+            } catch (Exception ignored) {
+                // Ignored unsubscribe error
+            }
+        }
+    }
+
     public void updateDeviceUsername(String newUsername, String newDeviceType, String newDeviceId) {
         boolean usernameChanged = (newUsername != null && !newUsername.trim().isEmpty() && !newUsername.equals(this.deviceUsername));
-        boolean typeChanged = (newDeviceType != null && !newDeviceType.trim().isEmpty() && !newDeviceType.equals(this.deviceType));
-        boolean idChanged = (newDeviceId != null && !newDeviceId.trim().isEmpty() && !newDeviceId.equals(this.deviceId));
 
         final String oldCommands = getCommandsTopic();
         final String oldStatus = getStatusTopic();
@@ -1619,12 +1625,8 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
             new Thread(() -> {
                 try {
                     if (usernameChanged) {
-                        if (oldCommands != null && !oldCommands.contains("//")) {
-                            try { mqttClient.unsubscribe(oldCommands); } catch (Exception ignored) {}
-                        }
-                        if (oldStatus != null && !oldStatus.contains("//")) {
-                            try { mqttClient.unsubscribe(oldStatus); } catch (Exception ignored) {}
-                        }
+                        unsubscribeQuietly(oldCommands);
+                        unsubscribeQuietly(oldStatus);
 
                         mqttClient.subscribe(getCommandsTopic());
                         mqttClient.subscribe(getStatusTopic());
@@ -1632,7 +1634,7 @@ private boolean verifyVolumeChange(String command, int initialVolume, String tie
                     }
 
                     if (this.deviceId != null && !this.deviceId.trim().isEmpty()) {
-                        mqttClient.subscribe("aiml/" + this.deviceId + "/register_response");
+                        mqttClient.subscribe(TOPIC_PREFIX + this.deviceId + SUFFIX_REGISTER_RESPONSE);
                     }
 
                     publishDeviceRegistration();

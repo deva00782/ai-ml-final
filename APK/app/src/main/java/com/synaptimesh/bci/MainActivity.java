@@ -34,6 +34,11 @@ public class MainActivity extends AppCompatActivity {
     public static final String KEY_DEVICE_ID = "bci_device_id";
     public static final String KEY_USER_DISCONNECTED = "bci_user_disconnected";
 
+    private static final String COLOR_AMBER = "#FCCA73";
+    private static final String COLOR_MINT_GREEN = "#60E8BB";
+    private static final String COLOR_MUTED_BLUE = "#9EAFC3";
+    private static final String COLOR_SLATE = "#94A3B8";
+
     private static MainActivity instance;
 
     public static synchronized MainActivity getInstance() {
@@ -51,7 +56,6 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvConsoleLog;
     private ScrollView consoleWrapper;
     private TextView tvDeviceUsername;
-    private Button btnChangeUsername;
 
     // Enhanced UI references
     private TextView tvDeviceUuid;
@@ -61,12 +65,9 @@ public class MainActivity extends AppCompatActivity {
     private ProgressBar pbTrackProgress;
     private TextView tvTrackTimeline;
     private TextView tvVolumeLevel;
-    private Button btnOpenJioSaavn;
     private TextView tvPermissionsSummary;
     private Button btnPermissionNotification;
     private Button btnPermissionAccessibility;
-    private Button btnClearLogs;
-    private Button btnToggleConsole;
     private boolean isConsoleExpanded = false;
 
     // Periodic telemetry refresh while active
@@ -95,7 +96,7 @@ public class MainActivity extends AppCompatActivity {
         tvConsoleLog = findViewById(R.id.tvConsoleLog);
         consoleWrapper = findViewById(R.id.consoleWrapper);
         tvDeviceUsername = findViewById(R.id.tvDeviceUsername);
-        btnChangeUsername = findViewById(R.id.btnChangeUsername);
+        Button btnChangeUsername = findViewById(R.id.btnChangeUsername);
 
         // Bind enhanced views
         tvDeviceUuid = findViewById(R.id.tvDeviceUuid);
@@ -105,12 +106,12 @@ public class MainActivity extends AppCompatActivity {
         pbTrackProgress = findViewById(R.id.pbTrackProgress);
         tvTrackTimeline = findViewById(R.id.tvTrackTimeline);
         tvVolumeLevel = findViewById(R.id.tvVolumeLevel);
-        btnOpenJioSaavn = findViewById(R.id.btnOpenJioSaavn);
+        Button btnOpenJioSaavn = findViewById(R.id.btnOpenJioSaavn);
         tvPermissionsSummary = findViewById(R.id.tvPermissionsSummary);
         btnPermissionNotification = findViewById(R.id.btnPermissionNotification);
         btnPermissionAccessibility = findViewById(R.id.btnPermissionAccessibility);
-        btnClearLogs = findViewById(R.id.btnClearLogs);
-        btnToggleConsole = findViewById(R.id.btnToggleConsole);
+        Button btnClearLogs = findViewById(R.id.btnClearLogs);
+        Button btnToggleConsole = findViewById(R.id.btnToggleConsole);
 
         // Ensure persistent unique hardware UUID exists and display it
         String deviceId = getSavedDeviceId();
@@ -127,90 +128,105 @@ public class MainActivity extends AppCompatActivity {
             promptUsernameDialog(true);
         }
 
-        btnChangeUsername.setOnClickListener(v -> promptUsernameDialog(false));
-
-        // Initial button states
         btnConnect.setEnabled(true);
         btnDisconnect.setEnabled(false);
+        setupButtonListeners(btnChangeUsername, btnOpenJioSaavn, btnClearLogs, btnToggleConsole);
+    }
 
-        btnConnect.setOnClickListener(v -> {
-            if (!isNotificationServiceEnabled()) {
-                appendLog("SYSTEM WARNING: Notification Listener permission not granted.");
-                Intent intent = new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS");
-                startActivity(intent);
-                return;
-            }
-            if (!isAccessibilityServiceEnabled()) {
-                appendLog("SYSTEM WARNING: Accessibility Service not enabled.");
-                Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
-                startActivity(intent);
-                return;
-            }
+    private void handleConnectClicked() {
+        if (!isNotificationServiceEnabled()) {
+            appendLog("SYSTEM WARNING: Notification Listener permission not granted.");
+            startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"));
+            return;
+        }
+        if (!isAccessibilityServiceEnabled()) {
+            appendLog("SYSTEM WARNING: Accessibility Service not enabled.");
+            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            return;
+        }
 
-            getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(KEY_USER_DISCONNECTED, false).apply();
-            updateStatusConnecting();
-            appendLog("SYSTEM ACTION: Connecting to server...");
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit().putBoolean(KEY_USER_DISCONNECTED, false).apply();
+        updateStatusConnecting();
+        appendLog("SYSTEM ACTION: Connecting to server...");
 
-            if (BciMediaService.getInstance() != null) {
-                BciMediaService.getInstance().connectMqtt();
-            } else {
-                appendLog("SYSTEM WARNING: BciMediaService is initializing...");
-            }
-        });
+        if (BciMediaService.getInstance() != null) {
+            BciMediaService.getInstance().connectMqtt();
+        } else {
+            appendLog("SYSTEM WARNING: BciMediaService is initializing...");
+        }
+    }
 
-        btnDisconnect.setOnClickListener(v -> {
-            getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(KEY_USER_DISCONNECTED, true).apply();
-            updateStatusDisconnecting();
-            appendLog("SYSTEM ACTION: Disconnecting from server...");
+    private void handleDisconnectClicked() {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit().putBoolean(KEY_USER_DISCONNECTED, true).apply();
+        updateStatusDisconnecting();
+        appendLog("SYSTEM ACTION: Disconnecting from server...");
 
-            if (BciMediaService.getInstance() != null) {
-                BciMediaService.getInstance().disconnectMqtt();
-            } else {
-                updateStatusOffline("Service stopped");
-            }
-        });
+        if (BciMediaService.getInstance() != null) {
+            BciMediaService.getInstance().disconnectMqtt();
+        } else {
+            updateStatusOffline("Service stopped");
+        }
+    }
 
-        // Open JioSaavn shortcut button
+    private void toggleConsoleExpansion(Button btnToggleConsole) {
+        isConsoleExpanded = !isConsoleExpanded;
+        ViewGroup.LayoutParams params = consoleWrapper.getLayoutParams();
+        float density = getResources().getDisplayMetrics().density;
+        params.height = isConsoleExpanded ? (int) (440 * density) : (int) (220 * density);
+        consoleWrapper.setLayoutParams(params);
+        btnToggleConsole.setText(isConsoleExpanded ? "COLLAPSE" : "EXPAND");
+    }
+
+    private void setupButtonListeners(Button btnChangeUsername, Button btnOpenJioSaavn, Button btnClearLogs, Button btnToggleConsole) {
+        btnChangeUsername.setOnClickListener(v -> promptUsernameDialog(false));
+        btnConnect.setOnClickListener(v -> handleConnectClicked());
+        btnDisconnect.setOnClickListener(v -> handleDisconnectClicked());
+
         if (btnOpenJioSaavn != null) {
             btnOpenJioSaavn.setOnClickListener(v -> openJioSaavn());
         }
-
-        // Direct permission click listeners
         if (btnPermissionNotification != null) {
-            btnPermissionNotification.setOnClickListener(v -> {
-                Intent intent = new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS");
-                startActivity(intent);
-            });
+            btnPermissionNotification.setOnClickListener(v -> startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")));
         }
-
         if (btnPermissionAccessibility != null) {
-            btnPermissionAccessibility.setOnClickListener(v -> {
-                Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
-                startActivity(intent);
-            });
+            btnPermissionAccessibility.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         }
-
-        // Clear console logs
         if (btnClearLogs != null) {
             btnClearLogs.setOnClickListener(v -> {
-                if (tvConsoleLog != null) {
-                    tvConsoleLog.setText("");
-                }
+                if (tvConsoleLog != null) tvConsoleLog.setText("");
             });
         }
-
-        // Toggle / Expand console height
         if (btnToggleConsole != null && consoleWrapper != null) {
-            btnToggleConsole.setOnClickListener(v -> {
-                isConsoleExpanded = !isConsoleExpanded;
-                ViewGroup.LayoutParams params = consoleWrapper.getLayoutParams();
-                float density = getResources().getDisplayMetrics().density;
-                params.height = isConsoleExpanded ? (int) (440 * density) : (int) (220 * density);
-                consoleWrapper.setLayoutParams(params);
-                btnToggleConsole.setText(isConsoleExpanded ? "COLLAPSE" : "EXPAND");
-            });
+            btnToggleConsole.setOnClickListener(v -> toggleConsoleExpansion(btnToggleConsole));
+        }
+    }
+
+    private void checkServiceConnection() {
+        boolean userDisconnected = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getBoolean(KEY_USER_DISCONNECTED, false);
+
+        if (BciMediaService.getInstance() != null) {
+            if (BciMediaService.getInstance().isMqttConnected()) {
+                updateStatusOnline();
+            } else if (!userDisconnected) {
+                updateStatusConnecting();
+                BciMediaService.getInstance().connectMqtt();
+            } else {
+                updateStatusOffline("Disconnected");
+            }
+            BciMediaService.getInstance().refreshMediaTelemetry();
+        } else {
+            updateStatusOffline(null);
+        }
+    }
+
+    private void showPermissionStandby(boolean notificationEnabled) {
+        if (tvStatus != null) {
+            String msg = notificationEnabled ? "●  STANDBY (Enable Accessibility)" : "●  STANDBY (Grant Notification Access)";
+            tvStatus.setText(msg);
+            tvStatus.setTextColor(Color.parseColor(COLOR_AMBER));
         }
     }
 
@@ -223,32 +239,9 @@ public class MainActivity extends AppCompatActivity {
         updatePermissionsUI(notificationEnabled, accessibilityEnabled);
 
         if (notificationEnabled && accessibilityEnabled) {
-            boolean userDisconnected = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getBoolean(KEY_USER_DISCONNECTED, false);
-
-            if (BciMediaService.getInstance() != null) {
-                if (BciMediaService.getInstance().isMqttConnected()) {
-                    updateStatusOnline();
-                } else if (!userDisconnected) {
-                    updateStatusConnecting();
-                    BciMediaService.getInstance().connectMqtt();
-                } else {
-                    updateStatusOffline("Disconnected");
-                }
-                BciMediaService.getInstance().refreshMediaTelemetry();
-            } else {
-                updateStatusOffline(null);
-            }
-        } else if (!notificationEnabled) {
-            if (tvStatus != null) {
-                tvStatus.setText("●  STANDBY (Grant Notification Access)");
-                tvStatus.setTextColor(Color.parseColor("#FCCA73"));
-            }
+            checkServiceConnection();
         } else {
-            if (tvStatus != null) {
-                tvStatus.setText("●  STANDBY (Enable Accessibility)");
-                tvStatus.setTextColor(Color.parseColor("#FCCA73"));
-            }
+            showPermissionStandby(notificationEnabled);
         }
 
         uiRefreshHandler.removeCallbacks(uiRefreshRunnable);
@@ -265,64 +258,75 @@ public class MainActivity extends AppCompatActivity {
         if (btnPermissionNotification != null) {
             if (notificationEnabled) {
                 btnPermissionNotification.setText("✓  Notification Access Enabled");
-                btnPermissionNotification.setTextColor(Color.parseColor("#60E8BB"));
+                btnPermissionNotification.setTextColor(Color.parseColor(COLOR_MINT_GREEN));
             } else {
                 btnPermissionNotification.setText("Grant Notification Access");
-                btnPermissionNotification.setTextColor(Color.parseColor("#FCCA73"));
+                btnPermissionNotification.setTextColor(Color.parseColor(COLOR_AMBER));
             }
         }
         if (btnPermissionAccessibility != null) {
             if (accessibilityEnabled) {
                 btnPermissionAccessibility.setText("✓  Accessibility Service Enabled");
-                btnPermissionAccessibility.setTextColor(Color.parseColor("#60E8BB"));
+                btnPermissionAccessibility.setTextColor(Color.parseColor(COLOR_MINT_GREEN));
             } else {
                 btnPermissionAccessibility.setText("Enable Accessibility");
-                btnPermissionAccessibility.setTextColor(Color.parseColor("#FCCA73"));
+                btnPermissionAccessibility.setTextColor(Color.parseColor(COLOR_AMBER));
             }
         }
         if (tvPermissionsSummary != null) {
             if (notificationEnabled && accessibilityEnabled) {
                 tvPermissionsSummary.setText("All required phone permissions are active and verified.");
-                tvPermissionsSummary.setTextColor(Color.parseColor("#60E8BB"));
+                tvPermissionsSummary.setTextColor(Color.parseColor(COLOR_MINT_GREEN));
             } else {
                 tvPermissionsSummary.setText("Media access enables playback telemetry. Accessibility enables search and touch gestures.");
-                tvPermissionsSummary.setTextColor(Color.parseColor("#94A3B8"));
+                tvPermissionsSummary.setTextColor(Color.parseColor(COLOR_SLATE));
             }
+        }
+    }
+
+    private void updateTitleAndArtist(String title, String artist) {
+        if (tvNowPlayingTitle != null) {
+            tvNowPlayingTitle.setText((title != null && !title.trim().isEmpty()) ? title : "Ready when you are");
+        }
+        if (tvNowPlayingArtist != null) {
+            tvNowPlayingArtist.setText((artist != null && !artist.trim().isEmpty()) ? artist : "Open JioSaavn and play a track");
+        }
+    }
+
+    private void updatePlaybackStatusDisplay(String status) {
+        if (tvPlaybackStatus == null) return;
+        if ("Playing".equalsIgnoreCase(status)) {
+            tvPlaybackStatus.setText("●  Playing");
+            tvPlaybackStatus.setTextColor(Color.parseColor(COLOR_MINT_GREEN));
+        } else if ("Paused".equalsIgnoreCase(status)) {
+            tvPlaybackStatus.setText("●  Paused");
+            tvPlaybackStatus.setTextColor(Color.parseColor(COLOR_AMBER));
+        } else {
+            tvPlaybackStatus.setText("No active session");
+            tvPlaybackStatus.setTextColor(Color.parseColor(COLOR_MUTED_BLUE));
+        }
+    }
+
+    private void updateTimelineAndVolume(String currentTime, String totalTime, int progressPercent, int volumePercent) {
+        if (pbTrackProgress != null) {
+            pbTrackProgress.setProgress(Math.max(0, Math.min(100, progressPercent)));
+        }
+        if (tvTrackTimeline != null) {
+            String cur = (currentTime != null && !currentTime.isEmpty()) ? currentTime : "--:--";
+            String tot = (totalTime != null && !totalTime.isEmpty()) ? totalTime : "--:--";
+            tvTrackTimeline.setText(cur + " / " + tot);
+        }
+        if (tvVolumeLevel != null) {
+            tvVolumeLevel.setText("Vol: " + volumePercent + "%");
         }
     }
 
     public void updateMediaDisplay(final String title, final String artist, final String status, final String currentTime, final String totalTime, final int progressPercent, final int volumePercent) {
         runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) return;
-            if (tvNowPlayingTitle != null) {
-                tvNowPlayingTitle.setText((title != null && !title.trim().isEmpty()) ? title : "Ready when you are");
-            }
-            if (tvNowPlayingArtist != null) {
-                tvNowPlayingArtist.setText((artist != null && !artist.trim().isEmpty()) ? artist : "Open JioSaavn and play a track");
-            }
-            if (tvPlaybackStatus != null) {
-                if (status != null && status.equalsIgnoreCase("Playing")) {
-                    tvPlaybackStatus.setText("●  Playing");
-                    tvPlaybackStatus.setTextColor(Color.parseColor("#60E8BB"));
-                } else if (status != null && status.equalsIgnoreCase("Paused")) {
-                    tvPlaybackStatus.setText("●  Paused");
-                    tvPlaybackStatus.setTextColor(Color.parseColor("#FCCA73"));
-                } else {
-                    tvPlaybackStatus.setText("No active session");
-                    tvPlaybackStatus.setTextColor(Color.parseColor("#9EAFC3"));
-                }
-            }
-            if (pbTrackProgress != null) {
-                pbTrackProgress.setProgress(Math.max(0, Math.min(100, progressPercent)));
-            }
-            if (tvTrackTimeline != null) {
-                String cur = (currentTime != null && !currentTime.isEmpty()) ? currentTime : "--:--";
-                String tot = (totalTime != null && !totalTime.isEmpty()) ? totalTime : "--:--";
-                tvTrackTimeline.setText(cur + " / " + tot);
-            }
-            if (tvVolumeLevel != null) {
-                tvVolumeLevel.setText("Vol: " + volumePercent + "%");
-            }
+            updateTitleAndArtist(title, artist);
+            updatePlaybackStatusDisplay(status);
+            updateTimelineAndVolume(currentTime, totalTime, progressPercent, volumePercent);
         });
     }
 
@@ -383,7 +387,7 @@ public class MainActivity extends AppCompatActivity {
             if (isFinishing() || isDestroyed()) return;
             if (tvStatus != null) {
                 tvStatus.setText("●  ONLINE");
-                tvStatus.setTextColor(Color.parseColor("#60E8BB")); // Mint Green
+                tvStatus.setTextColor(Color.parseColor(COLOR_MINT_GREEN)); // Mint Green
             }
             if (btnConnect != null) btnConnect.setEnabled(false);
             if (btnDisconnect != null) btnDisconnect.setEnabled(true);
@@ -408,7 +412,7 @@ public class MainActivity extends AppCompatActivity {
             if (isFinishing() || isDestroyed()) return;
             if (tvStatus != null) {
                 tvStatus.setText("●  STANDBY" + (reason != null && !reason.isEmpty() ? " (" + reason + ")" : ""));
-                tvStatus.setTextColor(Color.parseColor("#94A3B8"));
+                tvStatus.setTextColor(Color.parseColor(COLOR_SLATE));
             }
             if (btnConnect != null) btnConnect.setEnabled(true);
             if (btnDisconnect != null) btnDisconnect.setEnabled(false);
@@ -435,36 +439,28 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private String formatBciCommand(String command, String query) {
+        String matchCmd = command.toUpperCase().trim();
+        if (matchCmd.contains("NEXTTRACK") || matchCmd.contains("NEXT_SONG")) return "nexttrack";
+        if (matchCmd.contains("PLAY/PAUSE") || matchCmd.contains("PLAY_PAUSE")) return "play/pause";
+        if (matchCmd.contains("VOLUMEUP") || matchCmd.contains("VOLUME_UP")) return "volumeup";
+        if (matchCmd.contains("VOLUMEDOWN") || matchCmd.contains("VOLUME_DOWN")) return "volumedown";
+        if (matchCmd.contains("SEARCH_ALBUM") || matchCmd.contains("PLAYLIST") || matchCmd.contains("SEARCH_PLAYLIST") || matchCmd.contains("TYPE_QUERY") || matchCmd.contains("SEARCH")) {
+            String searchStr = (query != null && !query.trim().isEmpty()) ? query.trim() : "Inaam";
+            return "Search: " + searchStr;
+        }
+        if (matchCmd.contains("JIOSAAVN")) return "open jiosaavn";
+        if (matchCmd.contains("RETURN_TO_HOME") || "DROP".equals(matchCmd)) return "return to home";
+        return command.toLowerCase();
+    }
+
     public void processIncomingBciPacket(final String command, final String query) {
         runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) return;
-
-            String formattedCmd = command.toLowerCase();
-            boolean isSearch = false;
-            String searchStr = "";
-
-            String matchCmd = command.toUpperCase().trim();
-            if (matchCmd.contains("NEXTTRACK") || matchCmd.contains("NEXT_SONG")) {
-                formattedCmd = "nexttrack";
-            } else if (matchCmd.contains("PLAY/PAUSE") || matchCmd.contains("PLAY_PAUSE")) {
-                formattedCmd = "play/pause";
-            } else if (matchCmd.contains("VOLUMEUP") || matchCmd.contains("VOLUME_UP")) {
-                formattedCmd = "volumeup";
-            } else if (matchCmd.contains("VOLUMEDOWN") || matchCmd.contains("VOLUME_DOWN")) {
-                formattedCmd = "volumedown";
-            } else if (matchCmd.contains("SEARCH_ALBUM") || matchCmd.contains("PLAYLIST") || matchCmd.contains("SEARCH_PLAYLIST") || matchCmd.contains("TYPE_QUERY") || matchCmd.contains("SEARCH")) {
-                searchStr = (query != null && !query.trim().isEmpty()) ? query.trim() : "Inaam";
-                formattedCmd = "Search: " + searchStr;
-                isSearch = true;
-            } else if (matchCmd.contains("JIOSAAVN")) {
-                formattedCmd = "open jiosaavn";
-            } else if (matchCmd.contains("RETURN_TO_HOME") || matchCmd.equals("DROP")) {
-                formattedCmd = "return to home";
-            }
-
+            String formattedCmd = formatBciCommand(command, query);
             appendLog("MQTT RECEIVED: " + formattedCmd);
-            if (isSearch) {
-                appendLog("Executed Search for: " + searchStr);
+            if (formattedCmd.startsWith("Search: ")) {
+                appendLog("Executed Search for: " + formattedCmd.substring("Search: ".length()));
             }
         });
     }
@@ -504,9 +500,7 @@ public class MainActivity extends AppCompatActivity {
                         "The username '" + username + "' is already in use by another device.\nPlease choose a unique username so commands can reach your device.")
                     .setIcon(android.R.drawable.ic_dialog_alert)
                     .setCancelable(false)
-                    .setPositiveButton("Change Username", (dialog, which) -> {
-                        promptUsernameDialog(false);
-                    })
+                    .setPositiveButton("Change Username", (dialog, which) -> promptUsernameDialog(false))
                     .setNegativeButton("Disconnect", (dialog, which) -> {
                         updateStatusOffline("Name conflict");
                         if (BciMediaService.getInstance() != null) {
@@ -522,7 +516,7 @@ public class MainActivity extends AppCompatActivity {
         runOnUiThread(() -> {
             if (tvStatus != null) {
                 tvStatus.setText("●  ONLINE");
-                tvStatus.setTextColor(Color.parseColor("#60E8BB")); // Mint Green
+                tvStatus.setTextColor(Color.parseColor(COLOR_MINT_GREEN)); // Mint Green
             }
             appendLog("REGISTRATION APPROVED: Device verified as '" + username + "'.");
             Toast.makeText(this, "Device verified as '" + username + "'", Toast.LENGTH_SHORT).show();
@@ -552,7 +546,8 @@ public class MainActivity extends AppCompatActivity {
     private void updateUsernameDisplay(String username, String deviceType) {
         if (tvDeviceUsername != null) {
             String displayUser = (username != null && !username.trim().isEmpty()) ? username : "Not Set";
-            tvDeviceUsername.setText("Device ID: " + displayUser + " [ANDROID]");
+            String dType = (deviceType != null && !deviceType.trim().isEmpty()) ? deviceType.toUpperCase() : "ANDROID";
+            tvDeviceUsername.setText("Device ID: " + displayUser + " [" + dType + "]");
         }
     }
 

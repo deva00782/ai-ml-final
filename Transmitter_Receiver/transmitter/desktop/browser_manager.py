@@ -1460,7 +1460,7 @@ class BrowserManager:
         if self.driver is None:
             return
         try:
-            for h in list(self.driver.window_handles):
+            for h in self.driver.window_handles:
                 try:
                     self.driver.switch_to.window(h)
                     self.driver.close()

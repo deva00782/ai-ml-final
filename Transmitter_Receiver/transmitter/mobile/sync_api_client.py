@@ -120,6 +120,39 @@ def _wait_for_tunnel_ready(proc: subprocess.Popen) -> bool:
     return False
 
 
+def _extract_local_sync_port() -> str:
+    if ":" in SYNC_API_BASE_URL:
+        try:
+            return SYNC_API_BASE_URL.split(":")[-1].split("/")[0]
+        except Exception:
+            pass
+    return "8001"
+
+
+def _spawn_native_ssh_tunnel(key_path: Path, local_port: str):
+    cmd = [
+        "ssh",
+        "-i", str(key_path),
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=NUL",
+        "-o", "ConnectTimeout=5",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=3",
+        "-o", "ExitOnForwardFailure=yes",
+        "-N",
+        "-L", f"{local_port}:127.0.0.1:8000",
+        "ec2-user@51.21.170.178"
+    ]
+    creation_flags = 0x08000000 if os.name == "nt" else 0
+    return subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        creationflags=creation_flags,
+        text=True
+    )
+
+
 def ensure_sync_tunnel() -> bool:
     """Ensure the connection to the Sync API is alive.
     If not responding, Python automatically manages the secure connection
@@ -144,37 +177,11 @@ def ensure_sync_tunnel() -> bool:
             logger.warning(f"[NATIVE-TUNNEL] SSH key not found at {key_path}")
             return False
 
-        local_port = "8001"
-        if ":" in SYNC_API_BASE_URL:
-            try:
-                local_port = SYNC_API_BASE_URL.split(":")[-1].split("/")[0]
-            except Exception:
-                local_port = "8001"
-
-        cmd = [
-            "ssh",
-            "-i", str(key_path),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=NUL",
-            "-o", "ConnectTimeout=5",
-            "-o", "ServerAliveInterval=15",
-            "-o", "ServerAliveCountMax=3",
-            "-o", "ExitOnForwardFailure=yes",
-            "-N",
-            "-L", f"{local_port}:127.0.0.1:8000",
-            "ec2-user@51.21.170.178"
-        ]
+        local_port = _extract_local_sync_port()
 
         try:
             logger.info("[NATIVE-TUNNEL] Automatically opening database bridge from Python...")
-            creation_flags = 0x08000000 if os.name == "nt" else 0
-            _auto_tunnel_proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                creationflags=creation_flags,
-                text=True
-            )
+            _auto_tunnel_proc = _spawn_native_ssh_tunnel(key_path, local_port)
 
             if _wait_for_tunnel_ready(_auto_tunnel_proc):
                 return True
@@ -418,6 +425,29 @@ def _handle_send_event_response(resp, event_id: str) -> Optional[Dict[str, Any]]
     return None
 
 
+def _attempt_send_event(client, url, event_payload, headers, event_id, attempt):
+    try:
+        resp = client.session.post(url, json=event_payload, headers=headers, timeout=SYNC_API_TIMEOUT)
+        result = _handle_send_event_response(resp, event_id)
+        if result is not None:
+            return True, result
+        if resp.status_code >= 500 and attempt < SYNC_MAX_RETRIES:
+            time.sleep(0.5 * (2 ** attempt))
+            return False, None
+        logger.error(f"[SYNC API] Failed with status {resp.status_code}: {resp.text}")
+        return True, {"status": "error", "status_code": resp.status_code, "detail": resp.text}
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        if attempt < SYNC_MAX_RETRIES:
+            ensure_sync_tunnel()
+            time.sleep(0.5 * (2 ** attempt))
+            return False, None
+        logger.warning(f"[SYNC API] Connection error sending event {event_id} after retries: {e}")
+        return True, {"status": "offline", "message": str(e), "event_id": event_id}
+    except Exception:
+        logger.exception(f"[SYNC API] Unexpected error sending event {event_id}:")
+        return True, {"status": "error", "message": "Unexpected error", "event_id": event_id}
+
+
 def send_event(
     kind: str,
     device_id: str = "",
@@ -449,26 +479,10 @@ def send_event(
     }
 
     for attempt in range(1 + SYNC_MAX_RETRIES):
-        try:
-            resp = client.session.post(url, json=event_payload, headers=headers, timeout=SYNC_API_TIMEOUT)
-            result = _handle_send_event_response(resp, event_id)
-            if result is not None:
-                return result
-            if resp.status_code >= 500 and attempt < SYNC_MAX_RETRIES:
-                time.sleep(0.5 * (2 ** attempt))
-                continue
-            logger.error(f"[SYNC API] Failed with status {resp.status_code}: {resp.text}")
-            return {"status": "error", "status_code": resp.status_code, "detail": resp.text}
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-            if attempt < SYNC_MAX_RETRIES:
-                ensure_sync_tunnel()
-                time.sleep(0.5 * (2 ** attempt))
-                continue
-            logger.warning(f"[SYNC API] Connection error sending event {event_id} after retries: {e}")
-            return {"status": "offline", "message": str(e), "event_id": event_id}
-        except Exception:
-            logger.exception(f"[SYNC API] Unexpected error sending event {event_id}:")
-            return {"status": "error", "message": "Unexpected error", "event_id": event_id}
+        done, res = _attempt_send_event(client, url, event_payload, headers, event_id, attempt)
+        if done:
+            return res
+    return {"status": "offline", "message": "Max retries reached", "event_id": event_id}
 
 
 def send_inference_event(

@@ -1733,6 +1733,12 @@ def _close_dom_driver_handles() -> None:
             _DOM_DRIVER = None
 
 
+def _is_target_chrome_window(c: str, t: str, chrome_classes) -> bool:
+    is_chrome = c in chrome_classes or "chrome" in c.lower()
+    is_saavn = any(k in t for k in ("jiosaavn", "saavn", "about:blank")) or not t.strip()
+    return is_chrome and is_saavn
+
+
 def _close_win32_chrome_windows() -> None:
     if os.name != "nt":
         return
@@ -1745,7 +1751,7 @@ def _close_win32_chrome_windows() -> None:
         @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         def _enum_close(hwnd, _lparam):
             if not user32.IsWindowVisible(hwnd):
-                return True if hwnd else False
+                return True
             title_len = user32.GetWindowTextLengthW(hwnd) + 1
             title_buf = ctypes.create_unicode_buffer(title_len)
             user32.GetWindowTextW(hwnd, title_buf, title_len)
@@ -1753,10 +1759,9 @@ def _close_win32_chrome_windows() -> None:
             user32.GetClassNameW(hwnd, class_buf, 256)
             t = title_buf.value.lower()
             c = class_buf.value
-            if (c in chrome_classes or "chrome" in c.lower()):
-                if ("jiosaavn" in t or "saavn" in t or "about:blank" in t or not t.strip()):
-                    user32.PostMessageW(hwnd, 0x0010, 0, 0)
-            return True if hwnd else False
+            if _is_target_chrome_window(c, t, chrome_classes):
+                user32.PostMessageW(hwnd, 0x0010, 0, 0)
+            return True
 
         user32.EnumWindows(_enum_close, 0)
     except Exception as e:
@@ -2261,6 +2266,22 @@ def _ensure_dashboard_ready(driver) -> None:
                 pass
 
 
+def _handle_playback_session_recovery(e: Exception) -> None:
+    err_msg = str(e)
+    if "invalid session id" in err_msg.lower() or "no such window" in err_msg.lower():
+        logger.warning(f"[INIT] Session issue ({e}), attempting driver re-attachment...")
+        global _DOM_DRIVER
+        _DOM_DRIVER = None
+        new_driver = _get_dom_driver()
+        if new_driver and _switch_to_jiosaavn(new_driver):
+            try:
+                _select_and_play_first_song(new_driver)
+            except Exception as retry_err:
+                logger.warning(f"[INIT] Retry start song playback notice: {retry_err}")
+    else:
+        logger.warning(f"[INIT] Start song playback notice: {e}")
+
+
 def _execute_initial_playback(driver, pl_result: Dict[str, Any]) -> Dict[str, Any]:
     global _current_state
     try:
@@ -2275,19 +2296,7 @@ def _execute_initial_playback(driver, pl_result: Dict[str, Any]) -> Dict[str, An
         logger.warning("[INIT] Fallback playlists also reported issues, keeping JioSaavn open for user actions.")
         return pl_result
     except Exception as e:
-        err_msg = str(e)
-        if "invalid session id" in err_msg.lower() or "no such window" in err_msg.lower():
-            logger.warning(f"[INIT] Session issue ({e}), attempting driver re-attachment...")
-            global _DOM_DRIVER
-            _DOM_DRIVER = None
-            new_driver = _get_dom_driver()
-            if new_driver and _switch_to_jiosaavn(new_driver):
-                try:
-                    _select_and_play_first_song(new_driver)
-                except Exception as retry_err:
-                    logger.warning(f"[INIT] Retry start song playback notice: {retry_err}")
-        else:
-            logger.warning(f"[INIT] Start song playback notice: {e}")
+        _handle_playback_session_recovery(e)
         return pl_result
 
 

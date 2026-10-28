@@ -16,6 +16,8 @@ public class BciAccessibilityService extends AccessibilityService {
     private static final String TAG = "BciAccessibilityService";
     private static final String JIOSAAVN_PACKAGE_BEATS = "com.jio.media.jiobeats";
     private static final String JIOSAAVN_PACKAGE_SAAVN = "com.jio.media.jiosaavn";
+    private static final String KEYWORD_SEARCH = "search";
+    private static final String CLASS_EDIT_TEXT = "EditText";
     
     private static BciAccessibilityService instance;
 
@@ -170,6 +172,29 @@ public class BciAccessibilityService extends AccessibilityService {
         }
     }
 
+    private AccessibilityNodeInfo resolveSearchEditText(AccessibilityNodeInfo root) throws InterruptedException {
+        if (root == null) return null;
+        AccessibilityNodeInfo searchEditText = findSearchEditText(root);
+        if (searchEditText != null) return searchEditText;
+
+        log("BciSearch: [Step 1] Search field not visible. Finding Search button...");
+        AccessibilityNodeInfo searchButton = null;
+        for (int i = 0; i < 3; i++) {
+            AccessibilityNodeInfo currentRoot = getRootInActiveWindow();
+            if (currentRoot != null) {
+                searchButton = findSearchButton(currentRoot);
+                if (searchButton != null) break;
+            }
+            Thread.sleep(500);
+        }
+        if (searchButton == null) {
+            log("BciSearch: [ERROR] Search button not found.");
+            return null;
+        }
+        performClick(searchButton);
+        return waitForSearchEditText(5000);
+    }
+
     private void executeSearchSequence(String playlistName) {
         try {
             if (playlistName.isEmpty()) {
@@ -178,43 +203,16 @@ public class BciAccessibilityService extends AccessibilityService {
             }
 
             log("BciSearch: Syncing query: '" + playlistName + "'");
-            
-            // Only ensure foreground if not already there to save time
             if (!checkJioSaavnForeground()) {
                 ensureJioSaavnForeground();
             }
 
-            AccessibilityNodeInfo root = getRootInActiveWindow();
-            AccessibilityNodeInfo searchEditText = root != null ? findSearchEditText(root) : null;
-
-            // --- STEP 1: ACTIVATE SEARCH UI (Only if needed) ---
-            if (searchEditText == null) {
-                log("BciSearch: [Step 1] Search field not visible. Finding Search button...");
-                AccessibilityNodeInfo searchButton = null;
-                for (int i = 0; i < 3; i++) {
-                    root = getRootInActiveWindow();
-                    if (root != null) {
-                        searchButton = findSearchButton(root);
-                        if (searchButton != null) break;
-                    }
-                    Thread.sleep(500);
-                }
-
-                if (searchButton == null) {
-                    log("BciSearch: [ERROR] Search button not found.");
-                    return;
-                }
-
-                performClick(searchButton);
-                searchEditText = waitForSearchEditText(5000);
-            }
-
+            AccessibilityNodeInfo searchEditText = resolveSearchEditText(getRootInActiveWindow());
             if (searchEditText == null) {
                 log("BciSearch: [ERROR] Search field not found.");
                 return;
             }
 
-            // --- STEP 2: LIVE SYNC TEXT ---
             insertTextFast(searchEditText, playlistName);
             log("BciSearch: SUCCESS - Query synced.");
             Thread.sleep(600);
@@ -390,7 +388,7 @@ public class BciAccessibilityService extends AccessibilityService {
         CharSequence contentDesc = node.getContentDescription();
         if (contentDesc != null) {
             String desc = contentDesc.toString().toLowerCase().trim();
-            if (desc.contains("search") || desc.contains("explore")) {
+            if (desc.contains(KEYWORD_SEARCH) || desc.contains("explore")) {
                 return node;
             }
         }
@@ -399,7 +397,7 @@ public class BciAccessibilityService extends AccessibilityService {
         CharSequence text = node.getText();
         if (text != null) {
             String txt = text.toString().toLowerCase().trim();
-            if (txt.contains("search") || txt.contains("explore")) {
+            if (txt.contains(KEYWORD_SEARCH) || txt.contains("explore")) {
                 return node;
             }
         }
@@ -459,7 +457,7 @@ public class BciAccessibilityService extends AccessibilityService {
         if (node == null) return null;
 
         String className = node.getClassName() != null ? node.getClassName().toString() : "";
-        boolean isEditField = className.contains("EditText") || className.contains("android.widget.EditText") || node.isEditable();
+        boolean isEditField = className.contains(CLASS_EDIT_TEXT) || className.contains("android.widget." + CLASS_EDIT_TEXT) || node.isEditable();
 
         if (isEditField) {
             return node;
@@ -482,7 +480,7 @@ public class BciAccessibilityService extends AccessibilityService {
         CharSequence desc = node.getContentDescription();
         if (desc != null) {
             String descStr = desc.toString().toLowerCase();
-            if (descStr.contains("search songs") || descStr.contains("search music") || descStr.equals("search")) {
+            if (descStr.contains("search songs") || descStr.contains("search music") || descStr.equals(KEYWORD_SEARCH)) {
                 return node;
             }
         }
@@ -490,7 +488,7 @@ public class BciAccessibilityService extends AccessibilityService {
         CharSequence text = node.getText();
         if (text != null) {
             String textStr = text.toString().toLowerCase();
-            if (textStr.contains("search songs") || textStr.contains("search music") || textStr.equals("search")) {
+            if (textStr.contains("search songs") || textStr.contains("search music") || textStr.equals(KEYWORD_SEARCH)) {
                 return node;
             }
         }
@@ -549,15 +547,15 @@ public class BciAccessibilityService extends AccessibilityService {
         if (node == null) return null;
 
         String className = node.getClassName() != null ? node.getClassName().toString() : "";
-        boolean isEditText = className.contains("EditText") || className.contains("android.widget.EditText") || node.isEditable();
+        boolean isEditText = className.contains(CLASS_EDIT_TEXT) || className.contains("android.widget." + CLASS_EDIT_TEXT) || node.isEditable();
 
         if (!isEditText) {
             CharSequence desc = node.getContentDescription();
-            if (desc != null && desc.toString().toLowerCase().trim().equals("search")) {
+            if (desc != null && desc.toString().toLowerCase().trim().equals(KEYWORD_SEARCH)) {
                 return node;
             }
             CharSequence text = node.getText();
-            if (text != null && text.toString().toLowerCase().trim().equals("search")) {
+            if (text != null && text.toString().toLowerCase().trim().equals(KEYWORD_SEARCH)) {
                 return node;
             }
         }
@@ -573,160 +571,115 @@ public class BciAccessibilityService extends AccessibilityService {
         return null;
     }
 
-    private AccessibilityNodeInfo findFirstSearchSuggestion(AccessibilityNodeInfo node, String playlistName) {
-        if (node == null) return null;
-
-        // Check if node is clickable and contains target playlist text
+    private AccessibilityNodeInfo findClickableTextMatch(AccessibilityNodeInfo node, String playlistName) {
         CharSequence text = node.getText();
         if (text != null && text.toString().toLowerCase().contains(playlistName.toLowerCase())) {
-            if (node.isClickable()) {
-                return node;
-            }
-            // Trace parents to find a clickable container
+            if (node.isClickable()) return node;
             AccessibilityNodeInfo parent = node.getParent();
             while (parent != null) {
-                if (parent.isClickable()) {
-                    return parent;
-                }
+                if (parent.isClickable()) return parent;
                 parent = parent.getParent();
-            }
-        }
-
-        // Check if node is a list/recycler and pick first child
-        String className = node.getClassName() != null ? node.getClassName().toString() : "";
-        if (className.contains("RecyclerView") || className.contains("ListView")) {
-            int childCount = node.getChildCount();
-            for (int i = 0; i < childCount; i++) {
-                AccessibilityNodeInfo child = node.getChild(i);
-                if (child != null && child.isClickable()) {
-                    return child;
-                }
-            }
-        }
-
-        int childCount = node.getChildCount();
-        for (int i = 0; i < childCount; i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            AccessibilityNodeInfo result = findFirstSearchSuggestion(child, playlistName);
-            if (result != null) {
-                return result;
             }
         }
         return null;
     }
 
-    /**
-     * Executes the complete 3-Step JioSaavn Volume UI Navigation matching the exact user UI screens:
-     * Step 1 (Image 1): If on Home Screen mini-player, click mini-player bar to expand Full-Screen Player.
-     * Step 2 (Image 2): Find and click the bottom-left Speaker Icon button [ 🔊 ].
-     * Step 3 (Image 3): Find the green Volume SeekBar in the bottom sheet and scroll it UP or DOWN.
-     */
-    /**
-     * Executes the 3-Step JioSaavn Volume UI Navigation:
-     * Step 1: If on Home Screen mini-player, click mini-player bar to expand Full-Screen Player.
-     * Step 2: Find and click the bottom-left Speaker Icon button [ 🔊 ].
-     * Step 3: Find the green Volume SeekBar in the bottom sheet and scroll it UP or DOWN.
-     */
+    private AccessibilityNodeInfo findListChildSuggestion(AccessibilityNodeInfo node) {
+        String className = node.getClassName() != null ? node.getClassName().toString() : "";
+        if (className.contains("RecyclerView") || className.contains("ListView")) {
+            for (int i = 0; i < node.getChildCount(); i++) {
+                AccessibilityNodeInfo child = node.getChild(i);
+                if (child != null && child.isClickable()) return child;
+            }
+        }
+        return null;
+    }
+
+    private AccessibilityNodeInfo findFirstSearchSuggestion(AccessibilityNodeInfo node, String playlistName) {
+        if (node == null) return null;
+        AccessibilityNodeInfo match = findClickableTextMatch(node, playlistName);
+        if (match != null) return match;
+        AccessibilityNodeInfo listMatch = findListChildSuggestion(node);
+        if (listMatch != null) return listMatch;
+
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo result = findFirstSearchSuggestion(node.getChild(i), playlistName);
+            if (result != null) return result;
+        }
+        return null;
+    }
+
     /**
      * Executes the 3-Step JioSaavn Volume UI Navigation:
      * Step 1: If on Home Screen mini-player, click mini-player bar to expand Full-Screen Player.
      * Step 2: Find and click the bottom-left Speaker Icon button [ 🔊 ].
      * Step 3: Find the green Volume SeekBar in the bottom sheet, scroll it UP or DOWN, AND adjust actual hardware sound stream volume.
      */
+    private AccessibilityNodeInfo findOrExpandSpeakerButton() throws InterruptedException {
+        AccessibilityNodeInfo speakerBtn = findSpeakerIconButtonInAllWindows();
+        if (speakerBtn != null) {
+            return speakerBtn;
+        }
+        log("Volume UI: Speaker icon button not found. Checking if on Home screen mini-player...");
+        AccessibilityNodeInfo miniPlayer = findMiniPlayerBarInAllWindows();
+        if (miniPlayer != null) {
+            log("Volume UI: Found Mini-Player bar. Clicking to expand to Full-Screen Player...");
+            performClick(miniPlayer);
+            Thread.sleep(1200);
+            return findSpeakerIconButtonInAllWindows();
+        }
+        return null;
+    }
+
+    private AccessibilityNodeInfo locateVolumeSeekBar(String musicSeekBarId) throws InterruptedException {
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            Thread.sleep(600);
+            AccessibilityNodeInfo volumeSeekBar = findSeekBarExcludingInAllWindows(musicSeekBarId);
+            if (volumeSeekBar != null) {
+                log("Volume UI: Found NEW volume SeekBar on attempt " + attempt + ".");
+                return volumeSeekBar;
+            }
+            log("Volume UI: Volume panel not yet open. Attempt " + attempt + "/3...");
+        }
+        return null;
+    }
+
     public boolean adjustJioSaavnVolumeUi(boolean isVolumeUp) {
         try {
             log("Volume UI: Starting UI navigation sequence for volume " + (isVolumeUp ? "UP" : "DOWN"));
-
             if (!checkJioSaavnForeground()) {
-                log("Volume UI: JioSaavn not in foreground. Launching to foreground...");
                 ensureJioSaavnForeground();
             }
-
             if (!checkJioSaavnForeground()) {
                 log("Volume UI: JioSaavn could not be foregrounded, deferring to hardware volume.");
                 return false;
             }
 
-            // --- REMEMBER the music progress bar's resource ID ---
-            // JioSaavn uses obfuscated numeric IDs (e.g. "2131364647") so we
-            // cannot check for the word "volume". Instead, we remember which
-            // SeekBar is already on screen (the music timeline) and later
-            // look for a DIFFERENT SeekBar (the volume slider) after opening
-            // the speaker panel.
             AccessibilityNodeInfo musicSeekBar = findVolumeSeekBarInAllWindows();
-            String musicSeekBarId = "";
-            if (musicSeekBar != null) {
-                musicSeekBarId = musicSeekBar.getViewIdResourceName() != null
-                        ? musicSeekBar.getViewIdResourceName() : "";
-                log("Volume UI: Remembered music progress bar ID: " + musicSeekBarId);
-            }
+            String musicSeekBarId = (musicSeekBar != null && musicSeekBar.getViewIdResourceName() != null)
+                    ? musicSeekBar.getViewIdResourceName() : "";
 
-            // --- STEP 2 (Image 2): Look for Bottom-Left Speaker Icon Button [ 🔊 ] ---
-            log("Volume UI: Searching for Speaker Icon Button...");
-            AccessibilityNodeInfo speakerBtn = findSpeakerIconButtonInAllWindows();
-
-            // --- STEP 1 (Image 1): If Speaker Icon Button is NOT found, check if on Home Screen Mini-Player ---
+            AccessibilityNodeInfo speakerBtn = findOrExpandSpeakerButton();
             if (speakerBtn == null) {
-                log("Volume UI: Speaker icon button not found. Checking if on Home screen mini-player...");
-                AccessibilityNodeInfo miniPlayer = findMiniPlayerBarInAllWindows();
-                if (miniPlayer != null) {
-                    log("Volume UI: Found Mini-Player bar. Clicking to expand to Full-Screen Player...");
-                    performClick(miniPlayer);
-                    Thread.sleep(1200); // Smooth delay so full-screen player expansion is clearly visible
-                    speakerBtn = findSpeakerIconButtonInAllWindows();
-
-                    // Re-capture music seekbar after player expanded
-                    musicSeekBar = findVolumeSeekBarInAllWindows();
-                    if (musicSeekBar != null) {
-                        musicSeekBarId = musicSeekBar.getViewIdResourceName() != null
-                                ? musicSeekBar.getViewIdResourceName() : "";
-                        log("Volume UI: Updated music progress bar ID after expand: " + musicSeekBarId);
-                    }
-                }
-            }
-
-            // --- Execute STEP 2 (Image 2 -> Image 3) ---
-            if (speakerBtn != null) {
-                log("Volume UI: Clicking Speaker Icon button [ \uD83D\uDD0A ] to open Listening On volume panel...");
-                performClick(speakerBtn);
-
-                // --- Retry loop to find a NEW SeekBar (volume slider) that is
-                //     different from the music progress bar we remembered earlier ---
-                AccessibilityNodeInfo volumeSeekBar = null;
-                for (int attempt = 1; attempt <= 3; attempt++) {
-                    Thread.sleep(600); // Smooth delay per attempt so the panel opening is clearly visible
-
-                    // Search for any SeekBar that has a DIFFERENT resource ID
-                    // than the music progress bar. That new one is the volume slider.
-                    volumeSeekBar = findSeekBarExcludingInAllWindows(musicSeekBarId);
-                    if (volumeSeekBar != null) {
-                        log("Volume UI: Found NEW volume SeekBar (different from music bar) on attempt " + attempt + ".");
-                        break;
-                    }
-                    log("Volume UI: Volume panel not yet open. Attempt " + attempt + "/3...");
-                }
-
-                // --- Execute STEP 3 (Image 3) ---
-                if (volumeSeekBar != null) {
-                    boolean result = applyVolumeChange(volumeSeekBar, isVolumeUp);
-                    log("Volume UI: Adjusted revealed Volume SeekBar + hardware sound (" + (isVolumeUp ? "UP" : "DOWN") + "), result = " + result);
-                    
-                    // Allow the user to visibly see the updated slider on screen before dismissing
-                    Thread.sleep(700);
-                    log("Volume UI: Dismissing volume bottom sheet panel safely (no back action)...");
-                    dismissBottomSheetSafely(speakerBtn);
-                    Thread.sleep(300);
-
-                    return result;
-                } else {
-                    // Panel never opened or volume slider not found after 3 attempts.
-                    // Return false so BciMediaService falls through to hardware volume.
-                    log("Volume UI: Speaker was clicked but volume SeekBar not found after 3 attempts. Falling back to hardware volume.");
-                }
-            } else {
                 log("Volume UI: Could not locate Speaker Icon button [ \uD83D\uDD0A ] in current layout.");
+                return false;
             }
 
+            log("Volume UI: Clicking Speaker Icon button to open Listening On volume panel...");
+            performClick(speakerBtn);
+
+            AccessibilityNodeInfo volumeSeekBar = locateVolumeSeekBar(musicSeekBarId);
+            if (volumeSeekBar == null) {
+                log("Volume UI: Speaker clicked but volume SeekBar not found after 3 attempts.");
+                return false;
+            }
+
+            boolean result = applyVolumeChange(volumeSeekBar, isVolumeUp);
+            log("Volume UI: Adjusted revealed Volume SeekBar + hardware sound (" + (isVolumeUp ? "UP" : "DOWN") + "), result = " + result);
+            Thread.sleep(700);
+            dismissBottomSheetSafely(speakerBtn);
+            Thread.sleep(300);
+            return result;
         } catch (InterruptedException e) {
             log("Volume UI Interrupted: " + e.getMessage());
             Thread.currentThread().interrupt();
@@ -841,7 +794,9 @@ public class BciAccessibilityService extends AccessibilityService {
                 android.os.Bundle args = new android.os.Bundle();
                 args.putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, targetRatio * 100.0f);
                 result |= seekBar.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.getId(), args);
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            // Ignored; fallback search in active window handles this
+        }
         }
 
         // 3. Scroll action fallback
@@ -864,7 +819,9 @@ public class BciAccessibilityService extends AccessibilityService {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+            // Ignored; fallback search in active window handles this
+        }
         AccessibilityNodeInfo activeRoot = getRootInActiveWindow();
         return activeRoot != null ? findVolumeSeekBar(activeRoot) : null;
     }
@@ -881,7 +838,9 @@ public class BciAccessibilityService extends AccessibilityService {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+            // Ignored; fallback search in active window handles this
+        }
         AccessibilityNodeInfo activeRoot = getRootInActiveWindow();
         return activeRoot != null ? findSpeakerIconButton(activeRoot) : null;
     }
@@ -898,7 +857,9 @@ public class BciAccessibilityService extends AccessibilityService {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+            // Ignored; fallback search in active window handles this
+        }
         AccessibilityNodeInfo activeRoot = getRootInActiveWindow();
         return activeRoot != null ? findMiniPlayerBar(activeRoot) : null;
     }
@@ -993,7 +954,9 @@ public class BciAccessibilityService extends AccessibilityService {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+            // Ignored; fallback search in active window handles this
+        }
         AccessibilityNodeInfo activeRoot = getRootInActiveWindow();
         return activeRoot != null ? findSeekBarExcluding(activeRoot, excludedId) : null;
     }
@@ -1116,68 +1079,54 @@ public class BciAccessibilityService extends AccessibilityService {
      * 4. Coordinate tap fallback: taps at (X: 0.86*width, Y: 0.44*height) if tree search is exhausted.
      * 5. Strictly ignores bottom mini-player to avoid playing previous cached songs.
      */
+    private boolean tryFindAndClickPlay(AccessibilityNodeInfo root, String songTitle, int screenWidth, int screenHeight) {
+        AccessibilityNodeInfo playBtn = findSongPagePlayButton(root, screenWidth, screenHeight);
+        if (playBtn != null) {
+            log("playSearchedSong: Found song page play button. Clicking...");
+            return clickNodeOrTap(playBtn);
+        }
+        if (songTitle != null && !songTitle.trim().isEmpty()) {
+            AccessibilityNodeInfo songItem = findSongItemByTitle(root, songTitle, screenHeight);
+            if (songItem != null) {
+                log("playSearchedSong: Found song item matching '" + songTitle + "'. Clicking...");
+                return clickNodeOrTap(songItem);
+            }
+        }
+        return false;
+    }
+
     public void playSearchedSong(final String songTitle) {
         new Thread(() -> {
             try {
                 log("playSearchedSong: Waiting for JioSaavn song page to render for '" + songTitle + "'...");
-                // Brief initial delay to allow the deep link / search activity transition to start
                 Thread.sleep(600);
 
                 android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
                 int screenWidth = dm != null ? dm.widthPixels : 1080;
                 int screenHeight = dm != null ? dm.heightPixels : 2400;
-
                 boolean clicked = false;
 
                 for (int attempt = 1; attempt <= 15 && !clicked; attempt++) {
                     AccessibilityNodeInfo root = getRootInActiveWindow();
                     if (root == null) {
                         log("playSearchedSong: Attempt " + attempt + " — root is null. Retrying...");
-                        Thread.sleep(350);
-                        continue;
-                    }
-
-                    // On attempt 1, log nodes in target area for runtime diagnostics
-                    if (attempt == 1) {
-                        logNodesInTargetArea(root, screenWidth, screenHeight);
-                    }
-
-                    // Priority 1: Find the prominent circular teal Play button on the song detail page
-                    AccessibilityNodeInfo playBtn = findSongPagePlayButton(root, screenWidth, screenHeight);
-                    if (playBtn != null) {
-                        log("playSearchedSong: Found song page play button (class=" + playBtn.getClassName()
-                                + ", desc=" + playBtn.getContentDescription() + "). Clicking...");
-                        clicked = clickNodeOrTap(playBtn);
-                        if (clicked) break;
-                    }
-
-                    // Priority 2: Find the song title item/row directly in the search / album view
-                    if (songTitle != null && !songTitle.trim().isEmpty()) {
-                        AccessibilityNodeInfo songItem = findSongItemByTitle(root, songTitle, screenHeight);
-                        if (songItem != null) {
-                            log("playSearchedSong: Found song item matching '" + songTitle + "'. Clicking...");
-                            clicked = clickNodeOrTap(songItem);
-                            if (clicked) break;
+                    } else {
+                        if (attempt == 1) {
+                            logNodesInTargetArea(root, screenWidth, screenHeight);
                         }
+                        clicked = tryFindAndClickPlay(root, songTitle, screenWidth, screenHeight);
                     }
-
-                    log("playSearchedSong: Attempt " + attempt + "/15 — play button/item not found. Retrying in 350ms...");
-                    Thread.sleep(350);
+                    if (!clicked) {
+                        Thread.sleep(350);
+                    }
                 }
 
-                // Priority 3: Fallback physical coordinate tap at the exact screen location of the teal play button
                 if (!clicked && screenWidth > 0 && screenHeight > 0) {
-                    log("playSearchedSong: Accessibility node search exhausted. Attempting physical coordinate tap on Teal Play Button...");
-                    int targetX = (int) (screenWidth * 0.86);
-                    int targetY = (int) (screenHeight * 0.44);
-                    clicked = tapCoordinates(targetX, targetY);
+                    log("playSearchedSong: Accessibility node search exhausted. Attempting physical coordinate tap...");
+                    clicked = tapCoordinates((int) (screenWidth * 0.86), (int) (screenHeight * 0.44));
                 }
 
-                if (clicked) {
-                    log("playSearchedSong: Successfully triggered play on searched song!");
-                } else {
-                    log("playSearchedSong: Could not trigger play on searched song after all attempts.");
-                }
+                log("playSearchedSong: " + (clicked ? "Successfully triggered play!" : "Could not trigger play."));
             } catch (InterruptedException e) {
                 log("playSearchedSong interrupted: " + e.getMessage());
                 Thread.currentThread().interrupt();
@@ -1210,53 +1159,50 @@ public class BciAccessibilityService extends AccessibilityService {
         return null;
     }
 
+    private boolean matchesPlayDescription(CharSequence desc) {
+        if (desc == null) return false;
+        String d = desc.toString().toLowerCase().trim();
+        return !d.contains("previous") && !d.contains("next") && !d.contains("rewind") && !d.contains("forward")
+                && (d.equals("play icon") || d.equals("play") || d.equals("play song") || d.equals("play now")
+                || d.equals("play music") || d.equals("play all") || d.contains("play"));
+    }
+
+    private boolean matchesPlayText(CharSequence text) {
+        if (text == null) return false;
+        String t = text.toString().toLowerCase().trim();
+        return t.equals("play") || t.equals("play song") || t.equals("play now") || t.equals("play all");
+    }
+
+    private boolean matchesPlayResId(String resId) {
+        if (resId == null || resId.isEmpty()) return false;
+        return (resId.contains("play_button") || resId.contains("btn_play") || resId.contains("play_icon")
+                || resId.contains("playcurrentsong") || resId.contains("fab_play") || resId.contains("floating_play")
+                || resId.contains("iv_play")) && !resId.contains("next") && !resId.contains("prev");
+    }
+
+    private AccessibilityNodeInfo checkPlayNodeMatch(AccessibilityNodeInfo node) {
+        if (matchesPlayDescription(node.getContentDescription()) || matchesPlayText(node.getText())) {
+            AccessibilityNodeInfo clickable = findClickableAncestor(node);
+            return (clickable != null) ? clickable : (node.isClickable() ? node : null);
+        }
+        if (matchesPlayResId(node.getViewIdResourceName() != null ? node.getViewIdResourceName().toLowerCase() : "")) {
+            return findClickableAncestor(node);
+        }
+        return null;
+    }
+
     private AccessibilityNodeInfo findPlayButtonByKeyword(AccessibilityNodeInfo node, int screenWidth, int screenHeight) {
         if (node == null) return null;
-
         android.graphics.Rect bounds = new android.graphics.Rect();
         node.getBoundsInScreen(bounds);
-
-        // Filter out bottom mini-player bar
         if (screenHeight > 0 && bounds.top > screenHeight * 0.72) {
             return null;
         }
-
-        CharSequence desc = node.getContentDescription();
-        if (desc != null) {
-            String d = desc.toString().toLowerCase().trim();
-            if (!d.contains("previous") && !d.contains("next") && !d.contains("rewind") && !d.contains("forward")) {
-                if (d.equals("play icon") || d.equals("play") || d.equals("play song") || d.equals("play now")
-                        || d.equals("play music") || d.equals("play all") || d.contains("play")) {
-                    AccessibilityNodeInfo clickable = findClickableAncestor(node);
-                    if (clickable != null) return clickable;
-                    if (node.isClickable()) return node;
-                }
-            }
-        }
-
-        CharSequence text = node.getText();
-        if (text != null) {
-            String t = text.toString().toLowerCase().trim();
-            if (t.equals("play") || t.equals("play song") || t.equals("play now") || t.equals("play all")) {
-                AccessibilityNodeInfo clickable = findClickableAncestor(node);
-                if (clickable != null) return clickable;
-                if (node.isClickable()) return node;
-            }
-        }
-
-        String resId = node.getViewIdResourceName() != null ? node.getViewIdResourceName().toLowerCase() : "";
-        if (resId.contains("play_button") || resId.contains("btn_play") || resId.contains("play_icon")
-                || resId.contains("playcurrentsong") || resId.contains("fab_play") || resId.contains("floating_play")
-                || resId.contains("iv_play")) {
-            if (!resId.contains("next") && !resId.contains("prev")) {
-                AccessibilityNodeInfo clickable = findClickableAncestor(node);
-                if (clickable != null) return clickable;
-            }
-        }
+        AccessibilityNodeInfo match = checkPlayNodeMatch(node);
+        if (match != null) return match;
 
         for (int i = 0; i < node.getChildCount(); i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            AccessibilityNodeInfo result = findPlayButtonByKeyword(child, screenWidth, screenHeight);
+            AccessibilityNodeInfo result = findPlayButtonByKeyword(node.getChild(i), screenWidth, screenHeight);
             if (result != null) return result;
         }
         return null;
@@ -1277,31 +1223,29 @@ public class BciAccessibilityService extends AccessibilityService {
         return findNodeToRightOf(root, heartBounds, screenWidth, screenHeight);
     }
 
+    private boolean isHeartIcon(AccessibilityNodeInfo node) {
+        CharSequence desc = node.getContentDescription();
+        if (desc != null) {
+            String d = desc.toString().toLowerCase().trim();
+            if (d.contains("favorite") || d.contains("like") || d.contains("heart") || d.contains("favourite")) {
+                return true;
+            }
+        }
+        String resId = node.getViewIdResourceName() != null ? node.getViewIdResourceName().toLowerCase() : "";
+        return resId.contains("favorite") || resId.contains("like") || resId.contains("heart") || resId.contains("fav");
+    }
+
     private AccessibilityNodeInfo findHeartIconNode(AccessibilityNodeInfo node, int screenHeight) {
         if (node == null) return null;
-
         android.graphics.Rect bounds = new android.graphics.Rect();
         node.getBoundsInScreen(bounds);
         if (bounds.top > screenHeight * 0.72) return null;
 
-        // Only search in upper-middle area (between 25% and 60% of screen height)
-        if (bounds.centerY() >= screenHeight * 0.25 && bounds.centerY() <= screenHeight * 0.60) {
-            CharSequence desc = node.getContentDescription();
-            if (desc != null) {
-                String d = desc.toString().toLowerCase().trim();
-                if (d.contains("favorite") || d.contains("like") || d.contains("heart") || d.contains("favourite")) {
-                    return node;
-                }
-            }
-            String resId = node.getViewIdResourceName() != null ? node.getViewIdResourceName().toLowerCase() : "";
-            if (resId.contains("favorite") || resId.contains("like") || resId.contains("heart") || resId.contains("fav")) {
-                return node;
-            }
+        if (bounds.centerY() >= screenHeight * 0.25 && bounds.centerY() <= screenHeight * 0.60 && isHeartIcon(node)) {
+            return node;
         }
-
         for (int i = 0; i < node.getChildCount(); i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            AccessibilityNodeInfo result = findHeartIconNode(child, screenHeight);
+            AccessibilityNodeInfo result = findHeartIconNode(node.getChild(i), screenHeight);
             if (result != null) return result;
         }
         return null;
@@ -1336,34 +1280,35 @@ public class BciAccessibilityService extends AccessibilityService {
         return null;
     }
 
+    private boolean isTargetPlayButtonZone(android.graphics.Rect bounds, int screenWidth, int screenHeight) {
+        return bounds.centerY() >= screenHeight * 0.30 && bounds.centerY() <= screenHeight * 0.58
+                && bounds.centerX() >= screenWidth * 0.65 && bounds.centerX() <= screenWidth * 0.98;
+    }
+
+    private boolean isCircularButtonDimensions(int w, int h) {
+        return w >= 50 && w <= 350 && h >= 50 && h <= 350 && Math.abs(w - h) < w * 0.45;
+    }
+
     private AccessibilityNodeInfo findPlayButtonByGeometry(AccessibilityNodeInfo node, int screenWidth, int screenHeight) {
         if (node == null || screenWidth <= 0 || screenHeight <= 0) return null;
 
         android.graphics.Rect bounds = new android.graphics.Rect();
         node.getBoundsInScreen(bounds);
 
-        // Target box from photo: Y between 30% and 58%, X between 65% and 98%
-        if (bounds.centerY() >= screenHeight * 0.30 && bounds.centerY() <= screenHeight * 0.58
-                && bounds.centerX() >= screenWidth * 0.65 && bounds.centerX() <= screenWidth * 0.98) {
-            int w = bounds.width();
-            int h = bounds.height();
-            // Button is approximately circular/square and between 50px and 350px
-            if (w >= 50 && w <= 350 && h >= 50 && h <= 350 && Math.abs(w - h) < w * 0.45) {
-                AccessibilityNodeInfo clickable = findClickableAncestor(node);
-                if (clickable != null) {
-                    log("findPlayButtonByGeometry: Matched circular view in target zone: bounds=" + bounds.toShortString());
-                    return clickable;
-                }
-                if (node.isClickable()) {
-                    log("findPlayButtonByGeometry: Matched clickable view: bounds=" + bounds.toShortString());
-                    return node;
-                }
+        if (isTargetPlayButtonZone(bounds, screenWidth, screenHeight) && isCircularButtonDimensions(bounds.width(), bounds.height())) {
+            AccessibilityNodeInfo clickable = findClickableAncestor(node);
+            if (clickable != null) {
+                log("findPlayButtonByGeometry: Matched circular view in target zone: bounds=" + bounds.toShortString());
+                return clickable;
+            }
+            if (node.isClickable()) {
+                log("findPlayButtonByGeometry: Matched clickable view: bounds=" + bounds.toShortString());
+                return node;
             }
         }
 
         for (int i = 0; i < node.getChildCount(); i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            AccessibilityNodeInfo result = findPlayButtonByGeometry(child, screenWidth, screenHeight);
+            AccessibilityNodeInfo result = findPlayButtonByGeometry(node.getChild(i), screenWidth, screenHeight);
             if (result != null) return result;
         }
         return null;
@@ -1393,50 +1338,42 @@ public class BciAccessibilityService extends AccessibilityService {
      * Finds a clickable song title or row matching the searched song's name in the active view,
      * strictly excluding the bottom mini-player area.
      */
+    private boolean isTitleMatched(AccessibilityNodeInfo node, String queryClean) {
+        CharSequence text = node.getText();
+        if (text != null) {
+            String t = text.toString().toLowerCase().trim();
+            if (t.length() >= 3 && (t.equals(queryClean) || t.contains(queryClean) || queryClean.contains(t))) {
+                return true;
+            }
+        }
+        CharSequence desc = node.getContentDescription();
+        if (desc != null) {
+            String d = desc.toString().toLowerCase().trim();
+            return d.length() >= 3 && (d.contains(queryClean) || queryClean.contains(d));
+        }
+        return false;
+    }
+
     private AccessibilityNodeInfo findSongItemByTitle(AccessibilityNodeInfo node, String songTitle, int screenHeight) {
         if (node == null || songTitle == null || songTitle.trim().isEmpty()) return null;
 
         if (screenHeight > 0) {
             android.graphics.Rect bounds = new android.graphics.Rect();
             node.getBoundsInScreen(bounds);
-            if (bounds.top > screenHeight * 0.72) {
-                return null;
-            }
+            if (bounds.top > screenHeight * 0.72) return null;
         }
 
         String className = node.getClassName() != null ? node.getClassName().toString() : "";
-        if (className.contains("EditText") || node.isEditable()) {
-            return null;
-        }
+        if (className.contains(CLASS_EDIT_TEXT) || node.isEditable()) return null;
 
         String queryClean = songTitle.toLowerCase().trim();
-        CharSequence text = node.getText();
-        if (text != null) {
-            String t = text.toString().toLowerCase().trim();
-            if (t.length() >= 3 && (t.equals(queryClean) || t.contains(queryClean) || queryClean.contains(t))) {
-                AccessibilityNodeInfo clickable = findClickableAncestor(node);
-                if (clickable != null) {
-                    log("findSongItemByTitle: matched text='" + t + "' for '" + songTitle + "'");
-                    return clickable;
-                }
-            }
-        }
-
-        CharSequence desc = node.getContentDescription();
-        if (desc != null) {
-            String d = desc.toString().toLowerCase().trim();
-            if (d.length() >= 3 && (d.contains(queryClean) || queryClean.contains(d))) {
-                AccessibilityNodeInfo clickable = findClickableAncestor(node);
-                if (clickable != null) {
-                    log("findSongItemByTitle: matched desc='" + d + "' for '" + songTitle + "'");
-                    return clickable;
-                }
-            }
+        if (isTitleMatched(node, queryClean)) {
+            AccessibilityNodeInfo clickable = findClickableAncestor(node);
+            if (clickable != null) return clickable;
         }
 
         for (int i = 0; i < node.getChildCount(); i++) {
-            AccessibilityNodeInfo child = node.getChild(i);
-            AccessibilityNodeInfo result = findSongItemByTitle(child, songTitle, screenHeight);
+            AccessibilityNodeInfo result = findSongItemByTitle(node.getChild(i), songTitle, screenHeight);
             if (result != null) return result;
         }
         return null;

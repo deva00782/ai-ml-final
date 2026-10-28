@@ -136,97 +136,93 @@ class CommandRouter:
             error_message=error_message,
         )
 
+    def _get_uart_tx(self):
+        try:
+            from .uart_transmitter import uart_transmitter
+            return uart_transmitter
+        except ImportError:
+            try:
+                from uart_transmitter import uart_transmitter
+                return uart_transmitter
+            except ImportError:
+                return None
+
     def _route_uart(self, command, query):
+        uart_tx = self._get_uart_tx()
+        if not uart_tx or not uart_tx.enabled:
+            return {"command": command, "target": "uart", "dispatched": False, "reason": "UART disabled"}
+
         cmd_history_id = None
         try:
-            try:
-                from .uart_transmitter import uart_transmitter
-            except ImportError:
-                from uart_transmitter import uart_transmitter
-            if uart_transmitter and uart_transmitter.enabled:
-                if command in SEARCH_COMMAND_ALIASES:
-                    effective_query = (query or "").strip() if (query and str(query).strip()) else "Inaam"
-                    cmd_history_id = self._record_command_received(
-                        command, "uart", "uart", query=effective_query, song_url=effective_query, title=effective_query
-                    )
-                    uart_transmitter.send_search(effective_query)
-                    if cmd_history_id:
-                        self._update_command_published(cmd_history_id)
-                    return {"command": command, "target": "uart", "dispatched": True, "channel": "uart", "query": effective_query, "cmd_history_id": cmd_history_id}
-                cmd_history_id = self._record_command_received(command, "uart", "uart")
-                uart_transmitter.send_action(command)
+            if command in SEARCH_COMMAND_ALIASES:
+                eff_q = (query or "").strip() if (query and str(query).strip()) else "Inaam"
+                cmd_history_id = self._record_command_received(command, "uart", "uart", query=eff_q, song_url=eff_q, title=eff_q)
+                uart_tx.send_search(eff_q)
                 if cmd_history_id:
                     self._update_command_published(cmd_history_id)
-                return {"command": command, "target": "uart", "dispatched": True, "channel": "uart", "cmd_history_id": cmd_history_id}
-            return {"command": command, "target": "uart", "dispatched": False, "reason": "UART disabled"}
+                return {"command": command, "target": "uart", "dispatched": True, "channel": "uart", "query": eff_q, "cmd_history_id": cmd_history_id}
+
+            cmd_history_id = self._record_command_received(command, "uart", "uart")
+            uart_tx.send_action(command)
+            if cmd_history_id:
+                self._update_command_published(cmd_history_id)
+            return {"command": command, "target": "uart", "dispatched": True, "channel": "uart", "cmd_history_id": cmd_history_id}
         except Exception as e:
             if cmd_history_id:
                 self._update_command_failed(cmd_history_id, str(e))
             return {"command": command, "target": "uart", "dispatched": False, "reason": str(e)}
 
+    def _route_mobile_search(self, command, target, query, mqtt):
+        effective_query = (query or "").strip() if (query and str(query).strip()) else "Inaam"
+        cmd_history_id = None
+        try:
+            cmd_history_id = self._record_command_received(command, "mqtt", target, mqtt, query=effective_query)
+            search_res = mqtt.publish_search_command(effective_query, target=target)
+            song_url = (search_res or {}).get("song_url", "")
+            song_title = (search_res or {}).get("title", effective_query)
+            if cmd_history_id:
+                pg = self._get_pg_store()
+                if pg:
+                    with pg._get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE command_history SET song_url = %s, title = %s, status = 'published', updated_at = NOW() WHERE id = %s",
+                                (song_url, song_title, cmd_history_id),
+                            )
+                        conn.commit()
+            return {
+                "command": command,
+                "target": target,
+                "dispatched": True,
+                "channel": "mqtt",
+                "query": effective_query,
+                "song_url": song_url,
+                "title": song_title,
+                "cmd_history_id": cmd_history_id,
+            }
+        except Exception as e:
+            if cmd_history_id:
+                self._update_command_failed(cmd_history_id, str(e))
+            return None
+
     def _route_mobile(self, command, target, query):
         mqtt = device_manager.get_mobile().get("mqtt_service")
         if mqtt is None:
-            return {
-                "command": command,
-                "target": target,
-                "dispatched": False,
-                "reason": "mobile backend not registered",
-            }
+            return {"command": command, "target": target, "dispatched": False, "reason": "mobile backend not registered"}
         client = getattr(mqtt, "client", None)
         if client is None or not client.is_connected():
-            return {
-                "command": command,
-                "target": target,
-                "dispatched": False,
-                "reason": "MQTT not connected (broker unreachable) - APK will not receive the command",
-            }
+            return {"command": command, "target": target, "dispatched": False, "reason": "MQTT not connected (broker unreachable) - APK will not receive the command"}
 
         now = time.time()
         if command == "Right_Play_Pause":
             if self._last_mobile_publish["command"] == command and (now - self._last_mobile_publish["ts"]) < 1.0:
-                return {
-                    "command": command,
-                    "target": target,
-                    "dispatched": True,
-                    "channel": "mqtt",
-                    "reason": "duplicate play/pause suppressed within 1s (single action only)",
-                }
+                return {"command": command, "target": target, "dispatched": True, "channel": "mqtt", "reason": "duplicate play/pause suppressed within 1s (single action only)"}
             self._last_mobile_publish = {"command": command, "ts": now}
 
         if command in SEARCH_COMMAND_ALIASES:
-            effective_query = (query or "").strip() if (query and str(query).strip()) else "Inaam"
-            cmd_history_id = None
-            try:
-                cmd_history_id = self._record_command_received(
-                    command, "mqtt", target, mqtt, query=effective_query
-                )
-                search_res = mqtt.publish_search_command(effective_query, target=target)
-                song_url = (search_res or {}).get("song_url", "")
-                song_title = (search_res or {}).get("title", effective_query)
-                if cmd_history_id:
-                    pg = self._get_pg_store()
-                    if pg:
-                        with pg._get_connection() as conn:
-                            with conn.cursor() as cur:
-                                cur.execute(
-                                    "UPDATE command_history SET song_url = %s, title = %s, status = 'published', updated_at = NOW() WHERE id = %s",
-                                    (song_url, song_title, cmd_history_id),
-                                )
-                            conn.commit()
-                return {
-                    "command": command,
-                    "target": target,
-                    "dispatched": True,
-                    "channel": "mqtt",
-                    "query": effective_query,
-                    "song_url": song_url,
-                    "title": song_title,
-                    "cmd_history_id": cmd_history_id,
-                }
-            except Exception as e:
-                if cmd_history_id:
-                    self._update_command_failed(cmd_history_id, str(e))
+            res = self._route_mobile_search(command, target, query, mqtt)
+            if res is not None:
+                return res
 
         cmd_history_id = None
         try:

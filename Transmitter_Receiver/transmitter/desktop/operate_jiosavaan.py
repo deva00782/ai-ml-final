@@ -10,6 +10,8 @@ from os_operations import get_system_master_volume, set_system_master_volume, ge
 DEFAULT_SONG_TITLE = "Waiting for Track..."
 DEFAULT_SONG_ARTIST = "Unknown Artist"
 ACTION_LAUNCH_JIOSAAVN = "Launch JioSaavn"
+ACTION_START_AUTOMATION = "Start Automation"
+ACTION_STOP_AUTOMATION = "Stop Automation"
 
 CLOSE_ACTIONS = {
     "close app", "close_app", "right_close_app",
@@ -133,10 +135,10 @@ class JioSaavnController:
             return self.browser_manager.close_browser()
 
     def _handle_automation_action(self, normalized_action, action):
-        if action == "Start Automation" or normalized_action == "Start Automation":
+        if action == ACTION_START_AUTOMATION or normalized_action == ACTION_START_AUTOMATION:
             self.bci_processor.start_automation()
             return {"action": "success", "message": "Automation Started", "automation_active": True}
-        if action == "Stop Automation" or normalized_action == "Stop Automation":
+        if action == ACTION_STOP_AUTOMATION or normalized_action == ACTION_STOP_AUTOMATION:
             self.bci_processor.stop_automation()
             return {"action": "success", "message": "Automation Stopped", "automation_active": False}
         is_active = self.bci_processor.toggle_automation()
@@ -172,7 +174,7 @@ class JioSaavnController:
 
             logger.info(self.MODULE_NAME, f"Received action execution request: '{action}' (Normalized: '{normalized_action}', Query: {query})")
 
-            if normalized_action in ["Run BCI Automation", "Toggle Automation", "Start Automation", "Stop Automation"]:
+            if normalized_action in ["Run BCI Automation", "Toggle Automation", ACTION_START_AUTOMATION, ACTION_STOP_AUTOMATION]:
                 return self._handle_automation_action(normalized_action, action)
 
             if str(normalized_action).strip().lower() in CLOSE_ACTIONS:
