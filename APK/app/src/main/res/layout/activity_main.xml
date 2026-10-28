@@ -283,34 +283,6 @@
             </LinearLayout>
 
             <Button
-                android:id="@+id/btnSearchAndPlay"
-                android:layout_width="match_parent"
-                android:layout_height="46dp"
-                android:layout_marginTop="14dp"
-                android:backgroundTint="#059669"
-                android:text="Search &amp; Play"
-                android:textAllCaps="false"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp"
-                android:textStyle="bold"
-                app:cornerRadius="12dp" />
-
-            <EditText
-                android:id="@+id/etSearchQuery"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:backgroundTint="#60E8BB"
-                android:hint="Song name (optional)"
-                android:inputType="text"
-                android:maxLines="1"
-                android:paddingHorizontal="12dp"
-                android:paddingVertical="10dp"
-                android:textColor="#EEF4F9"
-                android:textColorHint="#64748B"
-                android:textSize="14sp" />
-
-            <Button
                 android:id="@+id/btnOpenJioSaavn"
                 android:layout_width="match_parent"
                 android:layout_height="46dp"

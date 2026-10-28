@@ -62,8 +62,6 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvTrackTimeline;
     private TextView tvVolumeLevel;
     private Button btnOpenJioSaavn;
-    private EditText etSearchQuery;
-    private Button btnSearchAndPlay;
     private TextView tvPermissionsSummary;
     private Button btnPermissionNotification;
     private Button btnPermissionAccessibility;
@@ -108,8 +106,6 @@ public class MainActivity extends AppCompatActivity {
         tvTrackTimeline = findViewById(R.id.tvTrackTimeline);
         tvVolumeLevel = findViewById(R.id.tvVolumeLevel);
         btnOpenJioSaavn = findViewById(R.id.btnOpenJioSaavn);
-        etSearchQuery = findViewById(R.id.etSearchQuery);
-        btnSearchAndPlay = findViewById(R.id.btnSearchAndPlay);
         tvPermissionsSummary = findViewById(R.id.tvPermissionsSummary);
         btnPermissionNotification = findViewById(R.id.btnPermissionNotification);
         btnPermissionAccessibility = findViewById(R.id.btnPermissionAccessibility);
@@ -179,17 +175,6 @@ public class MainActivity extends AppCompatActivity {
         // Open JioSaavn shortcut button
         if (btnOpenJioSaavn != null) {
             btnOpenJioSaavn.setOnClickListener(v -> openJioSaavn());
-        }
-
-        if (btnSearchAndPlay != null) {
-            btnSearchAndPlay.setOnClickListener(v -> {
-                String query = etSearchQuery == null ? "" : etSearchQuery.getText().toString();
-                if (BciMediaService.getInstance() != null) {
-                    BciMediaService.getInstance().searchAndPlaySong(query);
-                } else {
-                    appendLog("SEARCH WARNING: Media service is not ready.");
-                }
-            });
         }
 
         // Direct permission click listeners
