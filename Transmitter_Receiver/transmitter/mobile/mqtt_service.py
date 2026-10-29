@@ -497,6 +497,15 @@ class MQTTService:
 
         self._send_registration_response(device_id, disc_username, target_key, True)
 
+    def _lookup_existing_device(self, target_key, device_id):
+        existing_entry = self.registered_devices.get(target_key)
+        if not existing_entry and device_id:
+            dev_id_lower = str(device_id).strip().lower()
+            for k, v in self.registered_devices.items():
+                if str(v.get("device_id") or k).strip().lower() == dev_id_lower:
+                    return k, v
+        return target_key, existing_entry
+
     def _is_fast_path_match(self, existing_entry, disc_username, disc_type, device_id, target_key) -> bool:
         if not existing_entry:
             return False
@@ -525,15 +534,7 @@ class MQTTService:
         device_id = payload.get("device_id")
         target_key = device_id or disc_username
 
-        # Fast path deduplication
-        existing_entry = self.registered_devices.get(target_key)
-        if not existing_entry and device_id:
-            for k, v in self.registered_devices.items():
-                if str(v.get("device_id") or k).strip().lower() == str(device_id).strip().lower():
-                    existing_entry = v
-                    target_key = k
-                    break
-
+        target_key, existing_entry = self._lookup_existing_device(target_key, device_id)
         if self._is_fast_path_match(existing_entry, disc_username, disc_type, device_id, target_key):
             return
 
@@ -609,17 +610,26 @@ class MQTTService:
             status_raw = raw_payload.strip()
         return str(status_raw).upper() in ("ONLINE", "CONNECTED", "READY", "1", "TRUE")
 
+    def _is_status_topic(self, topic: str, parts: list, active_statuses: set) -> bool:
+        return topic in active_statuses or (len(parts) >= 3 and parts[0] == "bci" and parts[2] == "status")
+
+    def _is_heartbeat_topic(self, topic: str, parts: list) -> bool:
+        return topic == TOPIC_HEARTBEAT or (len(parts) >= 3 and parts[0] == "bci" and parts[2] == "heartbeat")
+
+    def _emit_device_status(self, sender_device: str, is_online: bool):
+        self._set_device_online(sender_device, is_online)
+        self.socketio.emit('device_status_changed', {
+            "device": sender_device,
+            "status": "online" if is_online else "offline",
+            "online": is_online
+        })
+
     def _handle_status_message(self, topic: str, payload: dict, raw_payload: str, parts: list, active_username: str, active_statuses: set):
-        if topic in active_statuses or (len(parts) >= 3 and parts[0] == "bci" and parts[2] == "status"):
+        if self._is_status_topic(topic, parts, active_statuses):
             is_online = self._parse_status_payload(payload, raw_payload)
             sender_device = parts[1] if len(parts) >= 3 else (active_username or self.active_device)
-            self._set_device_online(sender_device, is_online)
-            self.socketio.emit('device_status_changed', {
-                "device": sender_device,
-                "status": "online" if is_online else "offline",
-                "online": is_online
-            })
-        elif topic == TOPIC_HEARTBEAT or (len(parts) >= 3 and parts[0] == "bci" and parts[2] == "heartbeat"):
+            self._emit_device_status(sender_device, is_online)
+        elif self._is_heartbeat_topic(topic, parts):
             hb_dev = payload.get("device_id") or (parts[1] if len(parts) >= 3 else active_username)
             if hb_dev:
                 self._set_device_online(hb_dev, True)

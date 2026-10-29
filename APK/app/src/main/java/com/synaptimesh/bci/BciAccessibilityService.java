@@ -1095,45 +1095,52 @@ public class BciAccessibilityService extends AccessibilityService {
         return false;
     }
 
-    public void playSearchedSong(final String songTitle) {
-        new Thread(() -> {
-            try {
-                log("playSearchedSong: Waiting for JioSaavn song page to render for '" + songTitle + "'...");
-                Thread.sleep(600);
-
-                android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-                int screenWidth = dm != null ? dm.widthPixels : 1080;
-                int screenHeight = dm != null ? dm.heightPixels : 2400;
-                boolean clicked = false;
-
-                for (int attempt = 1; attempt <= 15 && !clicked; attempt++) {
-                    AccessibilityNodeInfo root = getRootInActiveWindow();
-                    if (root == null) {
-                        log("playSearchedSong: Attempt " + attempt + " — root is null. Retrying...");
-                    } else {
-                        if (attempt == 1) {
-                            logNodesInTargetArea(root, screenWidth, screenHeight);
-                        }
-                        clicked = tryFindAndClickPlay(root, songTitle, screenWidth, screenHeight);
-                    }
-                    if (!clicked) {
-                        Thread.sleep(350);
-                    }
+    private boolean runPlaySearchAttempts(String songTitle, int screenWidth, int screenHeight) throws InterruptedException {
+        boolean clicked = false;
+        for (int attempt = 1; attempt <= 15 && !clicked; attempt++) {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            if (root == null) {
+                log("playSearchedSong: Attempt " + attempt + " — root is null. Retrying...");
+            } else {
+                if (attempt == 1) {
+                    logNodesInTargetArea(root, screenWidth, screenHeight);
                 }
-
-                if (!clicked && screenWidth > 0 && screenHeight > 0) {
-                    log("playSearchedSong: Accessibility node search exhausted. Attempting physical coordinate tap...");
-                    clicked = tapCoordinates((int) (screenWidth * 0.86), (int) (screenHeight * 0.44));
-                }
-
-                log("playSearchedSong: " + (clicked ? "Successfully triggered play!" : "Could not trigger play."));
-            } catch (InterruptedException e) {
-                log("playSearchedSong interrupted: " + e.getMessage());
-                Thread.currentThread().interrupt();
-            } catch (Exception e) {
-                log("playSearchedSong error: " + e.getMessage());
+                clicked = tryFindAndClickPlay(root, songTitle, screenWidth, screenHeight);
             }
-        }).start();
+            if (!clicked) {
+                Thread.sleep(350);
+            }
+        }
+        return clicked;
+    }
+
+    private void executePlaySearchLoop(String songTitle) {
+        try {
+            log("playSearchedSong: Waiting for JioSaavn song page to render for '" + songTitle + "'...");
+            Thread.sleep(600);
+
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            int screenWidth = dm != null ? dm.widthPixels : 1080;
+            int screenHeight = dm != null ? dm.heightPixels : 2400;
+
+            boolean clicked = runPlaySearchAttempts(songTitle, screenWidth, screenHeight);
+
+            if (!clicked && screenWidth > 0 && screenHeight > 0) {
+                log("playSearchedSong: Accessibility node search exhausted. Attempting physical coordinate tap...");
+                clicked = tapCoordinates((int) (screenWidth * 0.86), (int) (screenHeight * 0.44));
+            }
+
+            log("playSearchedSong: " + (clicked ? "Successfully triggered play!" : "Could not trigger play."));
+        } catch (InterruptedException e) {
+            log("playSearchedSong interrupted: " + e.getMessage());
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log("playSearchedSong error: " + e.getMessage());
+        }
+    }
+
+    public void playSearchedSong(final String songTitle) {
+        new Thread(() -> executePlaySearchLoop(songTitle)).start();
     }
 
     /**
@@ -1183,7 +1190,13 @@ public class BciAccessibilityService extends AccessibilityService {
     private AccessibilityNodeInfo checkPlayNodeMatch(AccessibilityNodeInfo node) {
         if (matchesPlayDescription(node.getContentDescription()) || matchesPlayText(node.getText())) {
             AccessibilityNodeInfo clickable = findClickableAncestor(node);
-            return (clickable != null) ? clickable : (node.isClickable() ? node : null);
+            if (clickable != null) {
+                return clickable;
+            }
+            if (node.isClickable()) {
+                return node;
+            }
+            return null;
         }
         if (matchesPlayResId(node.getViewIdResourceName() != null ? node.getViewIdResourceName().toLowerCase() : "")) {
             return findClickableAncestor(node);

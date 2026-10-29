@@ -316,7 +316,7 @@ class MacOSOperations(OSOperations):
         return {"title": STATUS_WAITING_FOR_TRACK, "artist": STATUS_UNKNOWN_ARTIST, "is_playing": False}
 
 
-async def _async_exec(args, timeout=3):
+async def _async_exec(args):
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -515,7 +515,7 @@ class LinuxOperations(OSOperations):
         playerctl = shutil.which("playerctl")
         if not playerctl:
             return None
-        code, out = await _async_exec([playerctl, "metadata", "--format", "{{title}}|{{artist}}|{{status}}"], timeout=3)
+        code, out = await _async_exec([playerctl, "metadata", "--format", "{{title}}|{{artist}}|{{status}}"])
         if code == 0 and out.strip():
             parts = out.strip().split("|")
             if len(parts) >= 3:

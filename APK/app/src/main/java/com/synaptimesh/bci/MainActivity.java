@@ -38,6 +38,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String COLOR_MINT_GREEN = "#60E8BB";
     private static final String COLOR_MUTED_BLUE = "#9EAFC3";
     private static final String COLOR_SLATE = "#94A3B8";
+    private static final String PREFIX_SEARCH = "Search: ";
 
     private static MainActivity instance;
 
@@ -53,12 +54,10 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvStatus;
     private Button btnConnect;
     private Button btnDisconnect;
-    private TextView tvConsoleLog;
     private ScrollView consoleWrapper;
     private TextView tvDeviceUsername;
 
     // Enhanced UI references
-    private TextView tvDeviceUuid;
     private TextView tvNowPlayingTitle;
     private TextView tvNowPlayingArtist;
     private TextView tvPlaybackStatus;
@@ -93,13 +92,13 @@ public class MainActivity extends AppCompatActivity {
         tvStatus = findViewById(R.id.tvStatus);
         btnConnect = findViewById(R.id.btnConnect);
         btnDisconnect = findViewById(R.id.btnDisconnect);
-        tvConsoleLog = findViewById(R.id.tvConsoleLog);
+        TextView tvConsoleLog = findViewById(R.id.tvConsoleLog);
         consoleWrapper = findViewById(R.id.consoleWrapper);
         tvDeviceUsername = findViewById(R.id.tvDeviceUsername);
         Button btnChangeUsername = findViewById(R.id.btnChangeUsername);
 
         // Bind enhanced views
-        tvDeviceUuid = findViewById(R.id.tvDeviceUuid);
+        TextView tvDeviceUuid = findViewById(R.id.tvDeviceUuid);
         tvNowPlayingTitle = findViewById(R.id.tvNowPlayingTitle);
         tvNowPlayingArtist = findViewById(R.id.tvNowPlayingArtist);
         tvPlaybackStatus = findViewById(R.id.tvPlaybackStatus);
@@ -195,7 +194,8 @@ public class MainActivity extends AppCompatActivity {
         }
         if (btnClearLogs != null) {
             btnClearLogs.setOnClickListener(v -> {
-                if (tvConsoleLog != null) tvConsoleLog.setText("");
+                TextView tvConsole = findViewById(R.id.tvConsoleLog);
+                if (tvConsole != null) tvConsole.setText("");
             });
         }
         if (btnToggleConsole != null && consoleWrapper != null) {
@@ -407,18 +407,23 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void applyOfflineStatusUi(String reason) {
+        if (tvStatus != null) {
+            String suffix = (reason != null && !reason.isEmpty()) ? " (" + reason + ")" : "";
+            tvStatus.setText("●  STANDBY" + suffix);
+            tvStatus.setTextColor(Color.parseColor(COLOR_SLATE));
+        }
+        if (btnConnect != null) btnConnect.setEnabled(true);
+        if (btnDisconnect != null) btnDisconnect.setEnabled(false);
+        if (reason != null && !reason.isEmpty()) {
+            appendLog("STATUS: OFFLINE (" + reason + ")");
+        }
+    }
+
     public void updateStatusOffline(String reason) {
         runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) return;
-            if (tvStatus != null) {
-                tvStatus.setText("●  STANDBY" + (reason != null && !reason.isEmpty() ? " (" + reason + ")" : ""));
-                tvStatus.setTextColor(Color.parseColor(COLOR_SLATE));
-            }
-            if (btnConnect != null) btnConnect.setEnabled(true);
-            if (btnDisconnect != null) btnDisconnect.setEnabled(false);
-            if (reason != null && !reason.isEmpty()) {
-                appendLog("STATUS: OFFLINE (" + reason + ")");
-            }
+            applyOfflineStatusUi(reason);
         });
     }
 
@@ -439,15 +444,21 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private boolean isSearchBciCommand(String matchCmd) {
+        return matchCmd.contains("SEARCH_ALBUM") || matchCmd.contains("PLAYLIST")
+                || matchCmd.contains("SEARCH_PLAYLIST") || matchCmd.contains("TYPE_QUERY")
+                || matchCmd.contains("SEARCH");
+    }
+
     private String formatBciCommand(String command, String query) {
         String matchCmd = command.toUpperCase().trim();
         if (matchCmd.contains("NEXTTRACK") || matchCmd.contains("NEXT_SONG")) return "nexttrack";
         if (matchCmd.contains("PLAY/PAUSE") || matchCmd.contains("PLAY_PAUSE")) return "play/pause";
         if (matchCmd.contains("VOLUMEUP") || matchCmd.contains("VOLUME_UP")) return "volumeup";
         if (matchCmd.contains("VOLUMEDOWN") || matchCmd.contains("VOLUME_DOWN")) return "volumedown";
-        if (matchCmd.contains("SEARCH_ALBUM") || matchCmd.contains("PLAYLIST") || matchCmd.contains("SEARCH_PLAYLIST") || matchCmd.contains("TYPE_QUERY") || matchCmd.contains("SEARCH")) {
+        if (isSearchBciCommand(matchCmd)) {
             String searchStr = (query != null && !query.trim().isEmpty()) ? query.trim() : "Inaam";
-            return "Search: " + searchStr;
+            return PREFIX_SEARCH + searchStr;
         }
         if (matchCmd.contains("JIOSAAVN")) return "open jiosaavn";
         if (matchCmd.contains("RETURN_TO_HOME") || "DROP".equals(matchCmd)) return "return to home";
@@ -459,8 +470,8 @@ public class MainActivity extends AppCompatActivity {
             if (isFinishing() || isDestroyed()) return;
             String formattedCmd = formatBciCommand(command, query);
             appendLog("MQTT RECEIVED: " + formattedCmd);
-            if (formattedCmd.startsWith("Search: ")) {
-                appendLog("Executed Search for: " + formattedCmd.substring("Search: ".length()));
+            if (formattedCmd.startsWith(PREFIX_SEARCH)) {
+                appendLog("Executed Search for: " + formattedCmd.substring(PREFIX_SEARCH.length()));
             }
         });
     }
@@ -469,13 +480,14 @@ public class MainActivity extends AppCompatActivity {
         android.util.Log.d("MainActivity", logLine);
         runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) return;
-            if (tvConsoleLog != null && consoleWrapper != null) {
-                String timeStamp = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
-                CharSequence current = tvConsoleLog.getText();
+            TextView tvConsole = findViewById(R.id.tvConsoleLog);
+            if (tvConsole != null && consoleWrapper != null) {
+                String timeStamp = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+                CharSequence current = tvConsole.getText();
                 if (current != null && current.length() > 50000) {
-                    tvConsoleLog.setText(current.subSequence(current.length() - 25000, current.length()));
+                    tvConsole.setText(current.subSequence(current.length() - 25000, current.length()));
                 }
-                tvConsoleLog.append("[" + timeStamp + "] " + logLine + "\n");
+                tvConsole.append("[" + timeStamp + "] " + logLine + "\n");
                 consoleWrapper.post(() -> {
                     if (!isFinishing() && !isDestroyed()) {
                         consoleWrapper.fullScroll(View.FOCUS_DOWN);
@@ -595,8 +607,9 @@ public class MainActivity extends AppCompatActivity {
                 .apply();
 
             updateUsernameDisplay(cleaned, selectedType);
-            if (tvDeviceUuid != null) {
-                tvDeviceUuid.setText("UUID: " + deviceId);
+            TextView tvUuid = findViewById(R.id.tvDeviceUuid);
+            if (tvUuid != null) {
+                tvUuid.setText("UUID: " + deviceId);
             }
             appendLog("DEVICE ID: Set to '" + cleaned + "' [ANDROID] UUID=" + deviceId.substring(0, Math.min(8, deviceId.length())) + "...");
 

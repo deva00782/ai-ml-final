@@ -1750,6 +1750,8 @@ def _close_win32_chrome_windows() -> None:
 
         @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         def _enum_close(hwnd, _lparam):
+            if not hwnd:
+                return False
             if not user32.IsWindowVisible(hwnd):
                 return True
             title_len = user32.GetWindowTextLengthW(hwnd) + 1

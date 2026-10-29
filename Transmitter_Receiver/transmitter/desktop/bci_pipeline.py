@@ -258,6 +258,28 @@ class BCIPipelineProcessor:
         song_index = self._execute_bci_action(action_to_trigger, song_index)
         return timestamp, song_index, True
 
+    def _ensure_entries(self, json_path):
+        entries = self._load_dataset(json_path)
+        if not entries:
+            if entries is not None:
+                logger.warn(self.MODULE_NAME, "No data entries found in BCI dataset.")
+            return None
+        return entries
+
+    def _process_entries(self, entries, song_index):
+        last_processed_timestamp = 0.0
+        for idx, entry in enumerate(entries):
+            if not self._is_running:
+                break
+
+            last_processed_timestamp, song_index, executed = self._process_entry(
+                idx, entry, last_processed_timestamp, song_index
+            )
+
+            if executed and self.interruptible_sleep(3.0):
+                break
+        return song_index
+
     def _automation_loop(self):
         """Infinite loop iterating through data/integrated_eeg.json considering only AI/ML domain."""
         json_path = DATA_FILE_PATH if DATA_FILE_PATH.exists() else (Path(__file__).parent / "integrated_eeg.json")
@@ -267,10 +289,8 @@ class BCIPipelineProcessor:
         loop_pass = 1
 
         while self._is_running:
-            entries = self._load_dataset(json_path)
-            if entries is None or not entries:
-                if not entries:
-                    logger.warn(self.MODULE_NAME, "No data entries found in BCI dataset.")
+            entries = self._ensure_entries(json_path)
+            if entries is None:
                 if self.interruptible_sleep(3.0):
                     break
                 continue
@@ -279,19 +299,7 @@ class BCIPipelineProcessor:
             self.bci_filter.set_config(config.get("confidence_threshold"), config.get("volume_cooldown"))
 
             logger.info(self.MODULE_NAME, f"🔄 [Loop Pass #{loop_pass}] Processing AI/ML stream packets ({len(entries)} total samples)...")
-
-            last_processed_timestamp = 0.0
-
-            for idx, entry in enumerate(entries):
-                if not self._is_running:
-                    break
-
-                last_processed_timestamp, song_index, executed = self._process_entry(
-                    idx, entry, last_processed_timestamp, song_index
-                )
-
-                if executed and self.interruptible_sleep(3.0):
-                    break
+            song_index = self._process_entries(entries, song_index)
 
             loop_pass += 1
             if self._is_running:

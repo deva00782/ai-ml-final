@@ -489,7 +489,7 @@ public class BciMediaService extends NotificationListenerService {
     }
 
     private boolean isSearchCommand(String cmd) {
-        return cmd.equals("RIGHT") || cmd.equals("SEARCH")
+        return cmd.equals("RIGHT") || cmd.equals(CMD_SEARCH)
                 || cmd.contains("SEARCH_PLAYLIST") || cmd.contains("PLAYLIST") || cmd.contains("TYPE_QUERY");
     }
 
@@ -531,9 +531,8 @@ public class BciMediaService extends NotificationListenerService {
                 if (successfulTier != null && !successfulTier.isEmpty()) {
                     ack.put("tier", successfulTier);
                 }
-                ack.put("timestamp", new java.text.SimpleDateFormat(
-                    "yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.getDefault())
-                    .format(new java.util.Date()));
+                ack.put("timestamp", java.time.LocalDateTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")));
 
                 MqttMessage msg = new MqttMessage(ack.toString().getBytes());
                 msg.setQos(1);
@@ -556,9 +555,8 @@ public class BciMediaService extends NotificationListenerService {
                 ack.put(KEY_STATUS, "FAILED");
                 ack.put(KEY_COMMAND, command);
                 ack.put("reason", reason);
-                ack.put("timestamp", new java.text.SimpleDateFormat(
-                    "yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.getDefault())
-                    .format(new java.util.Date()));
+                ack.put("timestamp", java.time.LocalDateTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")));
 
                 MqttMessage msg = new MqttMessage(ack.toString().getBytes());
                 msg.setQos(1);
@@ -621,7 +619,7 @@ public class BciMediaService extends NotificationListenerService {
                 MqttMessage msg = new MqttMessage(status.toString().getBytes());
                 msg.setQos(1);
                 publishMqttAsync(getStatusTopic(), msg);
-                log("Published remote status: " + (active ? "ACTIVE" : "STANDBY"));
+                log("Published remote status: " + (active ? "ACTIVE" : STATE_STANDBY));
             } catch (Exception e) {
                 Log.e(TAG, "Failed to publish remote status", e);
             }
@@ -734,6 +732,12 @@ public class BciMediaService extends NotificationListenerService {
         return null;
     }
 
+    private void logIfNotSilent(boolean silent, String message) {
+        if (!silent) {
+            log(message);
+        }
+    }
+
     private MediaController findJioSaavnController(int maxRetries, long retryDelayMs, boolean silent) {
         try {
             MediaSessionManager sessionManager =
@@ -746,25 +750,21 @@ public class BciMediaService extends NotificationListenerService {
                 List<MediaController> controllers = sessionManager.getActiveSessions(listenerComponent);
                 MediaController match = findMatchingSession(controllers);
                 if (match != null) {
-                    if (!silent) log("MediaController found for JioSaavn on attempt " + attempt);
+                    logIfNotSilent(silent, "MediaController found for JioSaavn on attempt " + attempt);
                     return match;
                 }
 
-                if (!silent) {
-                    log("JioSaavn MediaController not found. Attempt " + attempt + "/" + maxRetries + ". Retrying...");
-                }
+                logIfNotSilent(silent, "JioSaavn MediaController not found. Attempt " + attempt + "/" + maxRetries + ". Retrying...");
                 if (attempt < maxRetries) {
                     sleepQuietly(retryDelayMs);
                 }
             }
         } catch (SecurityException se) {
-            if (!silent) log("SecurityException: Notification Listener permission missing. " + se.getMessage());
+            logIfNotSilent(silent, "SecurityException: Notification Listener permission missing. " + se.getMessage());
         } catch (Exception e) {
-            if (!silent) log("findJioSaavnController error: " + e.getMessage());
+            logIfNotSilent(silent, "findJioSaavnController error: " + e.getMessage());
         }
-        if (!silent) {
-            log("JioSaavn MediaController not found after all retries. Will use fallback path.");
-        }
+        logIfNotSilent(silent, "JioSaavn MediaController not found after all retries. Will use fallback path.");
         return null;
     }
 
@@ -830,86 +830,82 @@ public class BciMediaService extends NotificationListenerService {
         });
     }
 
+    private String extractUrlFromSection(JSONObject parent, String key) {
+        JSONObject obj = parent.optJSONObject(key);
+        if (obj == null) return null;
+        JSONArray data = obj.optJSONArray("data");
+        if (data == null || data.length() == 0) return null;
+        JSONObject first = data.optJSONObject(0);
+        return (first != null && first.has("url")) ? first.optString("url") : null;
+    }
+
     private String extractSongUrlFromJson(JSONObject json) {
-        if (json.has("songs")) {
-            JSONObject songsObj = json.optJSONObject("songs");
-            if (songsObj != null && songsObj.has("data")) {
-                JSONArray data = songsObj.optJSONArray("data");
-                if (data != null && data.length() > 0) {
-                    JSONObject first = data.optJSONObject(0);
-                    if (first != null && first.has("url")) return first.optString("url");
+        String url = extractUrlFromSection(json, "songs");
+        if (url != null) return url;
+        return extractUrlFromSection(json, "topquery");
+    }
+
+    private void triggerAccessibilitySearchFallback(String cleanQuery) {
+        if (BciAccessibilityService.getInstance() != null) {
+            BciAccessibilityService.getInstance().searchPlaylist(cleanQuery);
+        }
+    }
+
+    private void handleSuccessfulSearchResponse(java.net.HttpURLConnection conn, String cleanQuery) throws Exception {
+        StringBuilder response = new StringBuilder();
+        try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream()))) {
+            String inputLine;
+            while ((inputLine = in.readLine()) != null) {
+                response.append(inputLine);
+            }
+        }
+        JSONObject json = new JSONObject(response.toString());
+        String songUrl = extractSongUrlFromJson(json);
+        if (songUrl != null && !songUrl.isEmpty()) {
+            log("JioSaavn resolved: '" + cleanQuery + "' -> " + songUrl);
+            openJioSaavnDeeplink(songUrl, cleanQuery);
+        } else {
+            log("JioSaavn search: No results found for '" + cleanQuery + "'");
+            triggerAccessibilitySearchFallback(cleanQuery);
+        }
+    }
+
+    private void executeSongSearchNetworkQuery(String cleanQuery) {
+        java.net.HttpURLConnection conn = null;
+        try {
+            String encoded = java.net.URLEncoder.encode(cleanQuery, "UTF-8");
+            String apiUrl = "https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query=" + encoded;
+
+            java.net.URL url = java.net.URI.create(apiUrl).toURL();
+            conn = (java.net.HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+
+            if (conn.getResponseCode() == 200) {
+                handleSuccessfulSearchResponse(conn, cleanQuery);
+            } else {
+                log("JioSaavn API HTTP error: " + conn.getResponseCode());
+            }
+        } catch (Exception e) {
+            log("searchAndPlaySong error: " + e.getMessage());
+            triggerAccessibilitySearchFallback(cleanQuery);
+        } finally {
+            if (conn != null) {
+                try {
+                    conn.disconnect();
+                } catch (Exception ignored) {
+                    // Ignored error on connection disconnect
                 }
             }
         }
-        if (json.has("topquery")) {
-            JSONObject topObj = json.optJSONObject("topquery");
-            if (topObj != null && topObj.has("data")) {
-                JSONArray data = topObj.optJSONArray("data");
-                if (data != null && data.length() > 0) {
-                    JSONObject first = data.optJSONObject(0);
-                    if (first != null && first.has("url")) return first.optString("url");
-                }
-            }
-        }
-        return null;
     }
 
     public void searchAndPlaySong(String query) {
         final String cleanQuery = (query != null && !query.trim().isEmpty()) ? query.trim() : DEFAULT_SEARCH_QUERY;
         log("Querying JioSaavn endpoint for: '" + cleanQuery + "'...");
-
-        new Thread(() -> {
-            java.net.HttpURLConnection conn = null;
-            try {
-                String encoded = java.net.URLEncoder.encode(cleanQuery, "UTF-8");
-                String apiUrl = "https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query=" + encoded;
-
-                java.net.URL url = java.net.URI.create(apiUrl).toURL();
-                conn = (java.net.HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("GET");
-                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-                conn.setConnectTimeout(5000);
-                conn.setReadTimeout(5000);
-
-                if (conn.getResponseCode() == 200) {
-                    StringBuilder response = new StringBuilder();
-                    try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(conn.getInputStream()))) {
-                        String inputLine;
-                        while ((inputLine = in.readLine()) != null) {
-                            response.append(inputLine);
-                        }
-                    }
-
-                    JSONObject json = new JSONObject(response.toString());
-                    String songUrl = extractSongUrlFromJson(json);
-
-                    if (songUrl != null && !songUrl.isEmpty()) {
-                        log("JioSaavn resolved: '" + cleanQuery + "' -> " + songUrl);
-                        openJioSaavnDeeplink(songUrl, cleanQuery);
-                    } else {
-                        log("JioSaavn search: No results found for '" + cleanQuery + "'");
-                        if (BciAccessibilityService.getInstance() != null) {
-                            BciAccessibilityService.getInstance().searchPlaylist(cleanQuery);
-                        }
-                    }
-                } else {
-                    log("JioSaavn API HTTP error: " + conn.getResponseCode());
-                }
-            } catch (Exception e) {
-                log("searchAndPlaySong error: " + e.getMessage());
-                if (BciAccessibilityService.getInstance() != null) {
-                    BciAccessibilityService.getInstance().searchPlaylist(cleanQuery);
-                }
-            } finally {
-                if (conn != null) {
-                    try {
-                        conn.disconnect();
-                    } catch (Exception ignored) {
-                        // Ignored error on connection disconnect
-                    }
-                }
-            }
-        }).start();
+        new Thread(() -> executeSongSearchNetworkQuery(cleanQuery)).start();
     }
 
     private void handleCloseApp(String officialCommand) {
@@ -1029,34 +1025,29 @@ public class BciMediaService extends NotificationListenerService {
         }
     }
 
-    private void translateBrainwaveToMedia(String officialCommand, String query, String songUrl, String title) {
-        if (officialCommand == null || officialCommand.trim().isEmpty()) return;
-
-        final String effectiveTitle = (title != null && !title.trim().isEmpty()) ? title.trim() : query;
-        log("Translating command: " + officialCommand + (query.isEmpty() ? "" : " with query: " + query));
-
+    private boolean handleNonPlaybackCommand(String officialCommand, String query, String songUrl, String effectiveTitle) {
         if (officialCommand.equals(CMD_VOLUME_UP) || officialCommand.equals("Right_Volume_Down")) {
             handleVolume(officialCommand);
-            return;
+            return true;
         }
-
         if (officialCommand.equals("Right_Close_App") || officialCommand.equals("Right_Return_to_Home") || officialCommand.equals("Drop")) {
             handleCloseApp(officialCommand);
-            return;
+            return true;
         }
-
         if (officialCommand.equals("Right_JioSaavn")) {
             log("JioSaavn launch command received. Ensuring foreground...");
             ensureJioSaavnForeground();
             publishAck(officialCommand);
-            return;
+            return true;
         }
-
         if (officialCommand.equals(CMD_SEARCH_PLAYLIST) || officialCommand.equals("type_query") || officialCommand.equals(CMD_SEARCH)) {
             handleSearchCommand(query, songUrl, effectiveTitle);
-            return;
+            return true;
         }
+        return false;
+    }
 
+    private void executePlaybackTierPipeline(String officialCommand) {
         final int preState = capturePlaybackState();
         final long prePosition = captureQueuePosition();
         log("Pre-execution state capture: PlaybackState=" + preState + ", Position=" + prePosition);
@@ -1076,6 +1067,19 @@ public class BciMediaService extends NotificationListenerService {
         }
 
         executeMediaTier3(officialCommand, preState, prePosition);
+    }
+
+    private void translateBrainwaveToMedia(String officialCommand, String query, String songUrl, String title) {
+        if (officialCommand == null || officialCommand.trim().isEmpty()) return;
+
+        final String effectiveTitle = (title != null && !title.trim().isEmpty()) ? title.trim() : query;
+        log("Translating command: " + officialCommand + (query.isEmpty() ? "" : " with query: " + query));
+
+        if (handleNonPlaybackCommand(officialCommand, query, songUrl, effectiveTitle)) {
+            return;
+        }
+
+        executePlaybackTierPipeline(officialCommand);
     }
 
     private void verifyPlaybackStateChange(String command, int preState, String tierName) {
@@ -1267,6 +1271,20 @@ public class BciMediaService extends NotificationListenerService {
         return JIOSAAVN_PACKAGE_BEATS.equals(pkg) || JIOSAAVN_PACKAGE_SAAVN.equals(pkg);
     }
 
+    private void logMetadataKeys(MediaMetadata metadata) {
+        if (metadata == null) return;
+        log("MediaMetadata Changed. Keys: " + metadata.keySet().toString());
+        for (String key : metadata.keySet()) {
+            try {
+                Object val = metadata.getString(key);
+                if (val == null) val = metadata.getLong(key);
+                Log.d(TAG, "Metadata: " + key + " = " + val);
+            } catch (Exception ignored) {
+                // Ignored non-string non-long metadata value
+            }
+        }
+    }
+
     private MediaController.Callback createMediaCallback() {
         return new MediaController.Callback() {
             @Override
@@ -1281,18 +1299,7 @@ public class BciMediaService extends NotificationListenerService {
 
             @Override
             public void onMetadataChanged(MediaMetadata metadata) {
-                if (metadata != null) {
-                    log("MediaMetadata Changed. Keys: " + metadata.keySet().toString());
-                    for (String key : metadata.keySet()) {
-                        try {
-                            Object val = metadata.getString(key);
-                            if (val == null) val = metadata.getLong(key);
-                            Log.d(TAG, "Metadata: " + key + " = " + val);
-                        } catch (Exception ignored) {
-                            // Ignored non-string non-long metadata value
-                        }
-                    }
-                }
+                logMetadataKeys(metadata);
                 publishMediaUpdate();
             }
         };
@@ -1402,7 +1409,7 @@ public class BciMediaService extends NotificationListenerService {
 
     private void extractMetadataFields(MediaMetadata metadata) {
         String[] titleKeys = {
-            MediaMetadata.METADATA_KEY_TITLE, "android.media.metadata.TITLE", "title", "track", "song", "song_name"
+            MediaMetadata.METADATA_KEY_TITLE, "android.media.metadata.TITLE", KEY_TITLE, "track", "song", "song_name"
         };
         for (String key : titleKeys) {
             String title = metadata.getString(key);
@@ -1603,6 +1610,27 @@ public class BciMediaService extends NotificationListenerService {
         }
     }
 
+    private void resubscribeDeviceTopics(boolean usernameChanged, String oldCommands, String oldStatus) {
+        try {
+            if (usernameChanged) {
+                unsubscribeQuietly(oldCommands);
+                unsubscribeQuietly(oldStatus);
+
+                mqttClient.subscribe(getCommandsTopic());
+                mqttClient.subscribe(getStatusTopic());
+                log("MQTT: Resubscribed to topics for " + deviceUsername);
+            }
+
+            if (this.deviceId != null && !this.deviceId.trim().isEmpty()) {
+                mqttClient.subscribe(TOPIC_PREFIX + this.deviceId + SUFFIX_REGISTER_RESPONSE);
+            }
+
+            publishDeviceRegistration();
+        } catch (Exception e) {
+            Log.e(TAG, "Error resubscribing after device update", e);
+        }
+    }
+
     public void updateDeviceUsername(String newUsername, String newDeviceType, String newDeviceId) {
         boolean usernameChanged = (newUsername != null && !newUsername.trim().isEmpty() && !newUsername.equals(this.deviceUsername));
 
@@ -1622,26 +1650,7 @@ public class BciMediaService extends NotificationListenerService {
         log("MQTT: Updated device identity to '" + this.deviceUsername + "' [" + this.deviceType + "]");
 
         if (mqttClient != null && mqttClient.isConnected()) {
-            new Thread(() -> {
-                try {
-                    if (usernameChanged) {
-                        unsubscribeQuietly(oldCommands);
-                        unsubscribeQuietly(oldStatus);
-
-                        mqttClient.subscribe(getCommandsTopic());
-                        mqttClient.subscribe(getStatusTopic());
-                        log("MQTT: Resubscribed to topics for " + deviceUsername);
-                    }
-
-                    if (this.deviceId != null && !this.deviceId.trim().isEmpty()) {
-                        mqttClient.subscribe(TOPIC_PREFIX + this.deviceId + SUFFIX_REGISTER_RESPONSE);
-                    }
-
-                    publishDeviceRegistration();
-                } catch (Exception e) {
-                    Log.e(TAG, "Error resubscribing after device update", e);
-                }
-            }).start();
+            new Thread(() -> resubscribeDeviceTopics(usernameChanged, oldCommands, oldStatus)).start();
         }
     }
 
