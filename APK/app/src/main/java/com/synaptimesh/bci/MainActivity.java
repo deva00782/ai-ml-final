@@ -24,6 +24,7 @@ import java.util.Date;
 import java.util.Locale;
 
 @SuppressLint({"SetTextI18n", "SimpleDateFormat"})
+@SuppressWarnings("java:S6548")
 public class MainActivity extends AppCompatActivity {
 
     public static final String PREFS_NAME = "BciPrefs";

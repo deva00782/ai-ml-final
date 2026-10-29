@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+@SuppressWarnings("java:S6548")
 public class BciMediaService extends NotificationListenerService {
 
     private static final String TAG = "BciMediaService";

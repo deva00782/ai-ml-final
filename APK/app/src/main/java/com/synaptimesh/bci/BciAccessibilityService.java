@@ -11,6 +11,7 @@ import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 
+@SuppressWarnings("java:S6548")
 public class BciAccessibilityService extends AccessibilityService {
 
     private static final String TAG = "BciAccessibilityService";
