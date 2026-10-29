@@ -1096,23 +1096,26 @@ public class BciAccessibilityService extends AccessibilityService {
         return false;
     }
 
-    private boolean runPlaySearchAttempts(String songTitle, int screenWidth, int screenHeight) throws InterruptedException {
-        boolean clicked = false;
-        for (int attempt = 1; attempt <= 15 && !clicked; attempt++) {
-            AccessibilityNodeInfo root = getRootInActiveWindow();
-            if (root == null) {
-                log("playSearchedSong: Attempt " + attempt + " — root is null. Retrying...");
-            } else {
-                if (attempt == 1) {
-                    logNodesInTargetArea(root, screenWidth, screenHeight);
-                }
-                clicked = tryFindAndClickPlay(root, songTitle, screenWidth, screenHeight);
-            }
-            if (!clicked) {
-                Thread.sleep(350);
-            }
+    private boolean checkAttempt(int attempt, String songTitle, int screenWidth, int screenHeight) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null) {
+            log("playSearchedSong: Attempt " + attempt + " - root is null. Retrying...");
+            return false;
         }
-        return clicked;
+        if (attempt == 1) {
+            logNodesInTargetArea(root, screenWidth, screenHeight);
+        }
+        return tryFindAndClickPlay(root, songTitle, screenWidth, screenHeight);
+    }
+
+    private boolean runPlaySearchAttempts(String songTitle, int screenWidth, int screenHeight) throws InterruptedException {
+        for (int attempt = 1; attempt <= 15; attempt++) {
+            if (checkAttempt(attempt, songTitle, screenWidth, screenHeight)) {
+                return true;
+            }
+            Thread.sleep(350);
+        }
+        return false;
     }
 
     private void executePlaySearchLoop(String songTitle) {
