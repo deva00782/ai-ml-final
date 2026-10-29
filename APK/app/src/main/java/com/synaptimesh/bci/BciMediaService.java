@@ -33,11 +33,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 @SuppressWarnings("java:S6548")
 public class BciMediaService extends NotificationListenerService {
 
     private static final String TAG = "BciMediaService";
+    private static final DateTimeFormatter TIMESTAMP_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
     private static final String JIOSAAVN_PACKAGE_BEATS = "com.jio.media.jiobeats";
     private static final String JIOSAAVN_PACKAGE_SAAVN = "com.jio.media.jiosaavn";
     public static final String DEFAULT_SEARCH_QUERY = "Inaam";
@@ -532,8 +535,7 @@ public class BciMediaService extends NotificationListenerService {
                 if (successfulTier != null && !successfulTier.isEmpty()) {
                     ack.put("tier", successfulTier);
                 }
-                ack.put("timestamp", java.time.LocalDateTime.now()
-                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")));
+                ack.put("timestamp", LocalDateTime.now().format(TIMESTAMP_FORMATTER));
 
                 MqttMessage msg = new MqttMessage(ack.toString().getBytes());
                 msg.setQos(1);
@@ -556,8 +558,7 @@ public class BciMediaService extends NotificationListenerService {
                 ack.put(KEY_STATUS, "FAILED");
                 ack.put(KEY_COMMAND, command);
                 ack.put("reason", reason);
-                ack.put("timestamp", java.time.LocalDateTime.now()
-                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")));
+                ack.put("timestamp", LocalDateTime.now().format(TIMESTAMP_FORMATTER));
 
                 MqttMessage msg = new MqttMessage(ack.toString().getBytes());
                 msg.setQos(1);
