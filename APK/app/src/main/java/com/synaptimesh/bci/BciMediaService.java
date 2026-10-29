@@ -653,8 +653,8 @@ public class BciMediaService extends NotificationListenerService {
     }
 
     public void launchJioSaavn() {
-        if (BciAccessibilityService.getInstance() != null) {
-            BciAccessibilityService.getInstance().launchJioSaavn();
+        if (BciAccessibilityService.getActiveService() != null) {
+            BciAccessibilityService.getActiveService().launchJioSaavn();
             return;
         }
         try {
@@ -677,7 +677,7 @@ public class BciMediaService extends NotificationListenerService {
     }
 
     private void ensureJioSaavnForeground() {
-        if (BciAccessibilityService.getInstance() == null) {
+        if (BciAccessibilityService.getActiveService() == null) {
             Log.w(TAG, "Accessibility Service is not enabled. Launching JioSaavn directly.");
             if (MainActivity.getInstance() != null) {
                 MainActivity.getInstance().appendLog("SYSTEM WARNING: Accessibility Service is not enabled.");
@@ -686,13 +686,13 @@ public class BciMediaService extends NotificationListenerService {
             return;
         }
 
-        boolean isForeground = BciAccessibilityService.getInstance().checkJioSaavnForeground();
+        boolean isForeground = BciAccessibilityService.getActiveService().checkJioSaavnForeground();
         if (!isForeground) {
             Log.d(TAG, "Universal Rule: JioSaavn is not in foreground. Launching directly...");
             if (MainActivity.getInstance() != null) {
                 MainActivity.getInstance().appendLog("SYSTEM: JioSaavn not in foreground. Launching directly...");
             }
-            BciAccessibilityService.getInstance().launchJioSaavn();
+            BciAccessibilityService.getActiveService().launchJioSaavn();
 
             long start = System.currentTimeMillis();
             boolean inForeground = false;
@@ -703,7 +703,7 @@ public class BciMediaService extends NotificationListenerService {
                     Thread.currentThread().interrupt();
                     break;
                 }
-                inForeground = BciAccessibilityService.getInstance().checkJioSaavnForeground();
+                inForeground = BciAccessibilityService.getActiveService().checkJioSaavnForeground();
             }
             if (inForeground) {
                 Log.d(TAG, "JioSaavn package verified in foreground.");
@@ -816,9 +816,9 @@ public class BciMediaService extends NotificationListenerService {
                     log("Launched deep link via general intent.");
                 }
 
-                if (BciAccessibilityService.getInstance() != null) {
+                if (BciAccessibilityService.getActiveService() != null) {
                     log("Invoking BciAccessibilityService.playSearchedSong for '" + effectiveTitle + "'");
-                    BciAccessibilityService.getInstance().playSearchedSong(effectiveTitle);
+                    BciAccessibilityService.getActiveService().playSearchedSong(effectiveTitle);
                 } else {
                     log("BciAccessibilityService instance is null! Fallback to media transport controls.");
                 }
@@ -847,8 +847,8 @@ public class BciMediaService extends NotificationListenerService {
     }
 
     private void triggerAccessibilitySearchFallback(String cleanQuery) {
-        if (BciAccessibilityService.getInstance() != null) {
-            BciAccessibilityService.getInstance().searchPlaylist(cleanQuery);
+        if (BciAccessibilityService.getActiveService() != null) {
+            BciAccessibilityService.getActiveService().searchPlaylist(cleanQuery);
         }
     }
 
@@ -912,9 +912,9 @@ public class BciMediaService extends NotificationListenerService {
     private void handleCloseApp(String officialCommand) {
         log("Close JioSaavn command received. Pausing playback and closing JioSaavn...");
         pausePlaybackIfPlaying();
-        if (BciAccessibilityService.getInstance() != null) {
+        if (BciAccessibilityService.getActiveService() != null) {
             log("Closing JioSaavn via AccessibilityService...");
-            BciAccessibilityService.getInstance().closeJioSaavn();
+            BciAccessibilityService.getActiveService().closeJioSaavn();
         } else {
             log("AccessibilityService unavailable. Sending HOME intent fallback...");
             try {
@@ -979,22 +979,22 @@ public class BciMediaService extends NotificationListenerService {
     }
 
     private boolean executeMediaTier2(String officialCommand, int preState, long prePosition) {
-        if (BciAccessibilityService.getInstance() == null) {
+        if (BciAccessibilityService.getActiveService() == null) {
             log("Tier 2: Accessibility Service not available.");
             return false;
         }
         boolean result = false;
         switch (officialCommand) {
             case CMD_PLAY_PAUSE:
-                result = BciAccessibilityService.getInstance().clickPlayPause();
+                result = BciAccessibilityService.getActiveService().clickPlayPause();
                 if (result) verifyPlaybackStateChange(officialCommand, preState, TIER_ACCESSIBILITY_UI);
                 break;
             case CMD_NEXT_SONG:
-                result = BciAccessibilityService.getInstance().clickNextSong();
+                result = BciAccessibilityService.getActiveService().clickNextSong();
                 if (result) verifyTrackChange(officialCommand, prePosition, TIER_ACCESSIBILITY_UI);
                 break;
             case CMD_PREVIOUS_SONG:
-                result = BciAccessibilityService.getInstance().clickPreviousSong();
+                result = BciAccessibilityService.getActiveService().clickPreviousSong();
                 if (result) verifyTrackChange(officialCommand, prePosition, TIER_ACCESSIBILITY_UI);
                 break;
             default:
@@ -1231,13 +1231,13 @@ public class BciMediaService extends NotificationListenerService {
     }
 
     private boolean tryAccessibilityVolume(String command) {
-        if (BciAccessibilityService.getInstance() == null) {
+        if (BciAccessibilityService.getActiveService() == null) {
             log("Tier 1: AccessibilityService instance is null/disabled.");
             return false;
         }
         try {
             boolean isVolumeUp = command.equals(CMD_VOLUME_UP);
-            boolean result = BciAccessibilityService.getInstance().adjustJioSaavnVolumeUi(isVolumeUp);
+            boolean result = BciAccessibilityService.getActiveService().adjustJioSaavnVolumeUi(isVolumeUp);
             log("Tier 1: Accessibility UI volume slider adjust returned = " + result);
             return result;
         } catch (Exception e) {

@@ -349,7 +349,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private boolean isAccessibilityServiceEnabled() {
-        if (BciAccessibilityService.getInstance() != null) {
+        if (BciAccessibilityService.getActiveService() != null) {
             return true;
         }
         int accessibilityEnabled = 0;

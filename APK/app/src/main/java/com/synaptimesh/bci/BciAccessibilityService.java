@@ -20,14 +20,14 @@ public class BciAccessibilityService extends AccessibilityService {
     private static final String KEYWORD_SEARCH = "search";
     private static final String CLASS_EDIT_TEXT = "EditText";
     
-    private static BciAccessibilityService instance;
+    private static BciAccessibilityService activeService;
 
-    public static synchronized BciAccessibilityService getInstance() {
-        return instance;
+    public static synchronized BciAccessibilityService getActiveService() {
+        return activeService;
     }
 
-    private static synchronized void setInstance(BciAccessibilityService service) {
-        instance = service;
+    private static synchronized void setActiveService(BciAccessibilityService service) {
+        activeService = service;
     }
 
     private String currentPackageName = "";
@@ -48,7 +48,7 @@ public class BciAccessibilityService extends AccessibilityService {
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
-        setInstance(this);
+        setActiveService(this);
         log("Accessibility Service connected successfully.");
     }
 
@@ -73,7 +73,7 @@ public class BciAccessibilityService extends AccessibilityService {
         if (searchHandler != null) {
             searchHandler.removeCallbacksAndMessages(null);
         }
-        setInstance(null);
+        setActiveService(null);
     }
 
     public boolean checkJioSaavnForeground() {
