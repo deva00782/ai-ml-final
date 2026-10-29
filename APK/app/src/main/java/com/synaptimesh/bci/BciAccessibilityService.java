@@ -1202,7 +1202,8 @@ public class BciAccessibilityService extends AccessibilityService {
             }
             return null;
         }
-        if (matchesPlayResId(node.getViewIdResourceName() != null ? node.getViewIdResourceName().toLowerCase() : "")) {
+        String viewId = node.getViewIdResourceName();
+        if (viewId != null && matchesPlayResId(viewId.toLowerCase())) {
             return findClickableAncestor(node);
         }
         return null;
