@@ -20,6 +20,9 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 
 import java.util.Locale;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 
 @SuppressLint("SetTextI18n")
 @SuppressWarnings("java:S6548")
@@ -481,7 +484,7 @@ public class MainActivity extends AppCompatActivity {
             if (isFinishing() || isDestroyed()) return;
             TextView tvConsole = findViewById(R.id.tvConsoleLog);
             if (tvConsole != null && consoleWrapper != null) {
-                String timeStamp = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+                String timeStamp = LocalTime.now(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm:ss"));
                 CharSequence current = tvConsole.getText();
                 if (current != null && current.length() > 50000) {
                     tvConsole.setText(current.subSequence(current.length() - 25000, current.length()));

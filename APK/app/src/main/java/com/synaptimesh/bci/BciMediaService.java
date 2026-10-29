@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 
 @SuppressWarnings("java:S6548")
@@ -535,7 +536,7 @@ public class BciMediaService extends NotificationListenerService {
                 if (successfulTier != null && !successfulTier.isEmpty()) {
                     ack.put("tier", successfulTier);
                 }
-                ack.put("timestamp", LocalDateTime.now().format(TIMESTAMP_FORMATTER));
+                ack.put("timestamp", LocalDateTime.now(ZoneId.systemDefault()).format(TIMESTAMP_FORMATTER));
 
                 MqttMessage msg = new MqttMessage(ack.toString().getBytes());
                 msg.setQos(1);
@@ -558,7 +559,7 @@ public class BciMediaService extends NotificationListenerService {
                 ack.put(KEY_STATUS, "FAILED");
                 ack.put(KEY_COMMAND, command);
                 ack.put("reason", reason);
-                ack.put("timestamp", LocalDateTime.now().format(TIMESTAMP_FORMATTER));
+                ack.put("timestamp", LocalDateTime.now(ZoneId.systemDefault()).format(TIMESTAMP_FORMATTER));
 
                 MqttMessage msg = new MqttMessage(ack.toString().getBytes());
                 msg.setQos(1);
