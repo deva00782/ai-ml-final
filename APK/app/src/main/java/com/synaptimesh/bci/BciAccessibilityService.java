@@ -122,8 +122,8 @@ public class BciAccessibilityService extends AccessibilityService {
             try {
                 log("Executing close JioSaavn sequence...");
                 // 1. Pause playback
-                if (BciMediaService.getInstance() != null) {
-                    BciMediaService.getInstance().pausePlaybackIfPlaying();
+                if (BciMediaService.getActiveService() != null) {
+                    BciMediaService.getActiveService().pausePlaybackIfPlaying();
                 }
 
                 // 2. Perform global HOME action to minimize JioSaavn and return to Android home screen
@@ -1441,8 +1441,8 @@ public class BciAccessibilityService extends AccessibilityService {
 
     private static void log(String message) {
         Log.d(TAG, message);
-        if (MainActivity.getInstance() != null) {
-            MainActivity.getInstance().appendLog("ACCESSIBILITY: " + message);
+        if (MainActivity.getActiveActivity() != null) {
+            MainActivity.getActiveActivity().appendLog("ACCESSIBILITY: " + message);
         }
     }
 }

@@ -19,11 +19,9 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.Locale;
 
-@SuppressLint({"SetTextI18n", "SimpleDateFormat"})
+@SuppressLint("SetTextI18n")
 @SuppressWarnings("java:S6548")
 public class MainActivity extends AppCompatActivity {
 
@@ -41,14 +39,14 @@ public class MainActivity extends AppCompatActivity {
     private static final String COLOR_SLATE = "#94A3B8";
     private static final String PREFIX_SEARCH = "Search: ";
 
-    private static MainActivity instance;
+    private static MainActivity activeActivity;
 
-    public static synchronized MainActivity getInstance() {
-        return instance;
+    public static synchronized MainActivity getActiveActivity() {
+        return activeActivity;
     }
 
-    private static synchronized void setInstance(MainActivity activity) {
-        instance = activity;
+    private static synchronized void setActiveActivity(MainActivity activity) {
+        activeActivity = activity;
     }
 
     // Existing UI references
@@ -75,8 +73,8 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable uiRefreshRunnable = new Runnable() {
         @Override
         public void run() {
-            if (BciMediaService.getInstance() != null) {
-                BciMediaService.getInstance().refreshMediaTelemetry();
+            if (BciMediaService.getActiveService() != null) {
+                BciMediaService.getActiveService().refreshMediaTelemetry();
             }
             uiRefreshHandler.postDelayed(this, 1000);
         }
@@ -87,7 +85,7 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        setInstance(this);
+        setActiveActivity(this);
 
         // Bind existing views
         tvStatus = findViewById(R.id.tvStatus);
@@ -150,8 +148,8 @@ public class MainActivity extends AppCompatActivity {
         updateStatusConnecting();
         appendLog("SYSTEM ACTION: Connecting to server...");
 
-        if (BciMediaService.getInstance() != null) {
-            BciMediaService.getInstance().connectMqtt();
+        if (BciMediaService.getActiveService() != null) {
+            BciMediaService.getActiveService().connectMqtt();
         } else {
             appendLog("SYSTEM WARNING: BciMediaService is initializing...");
         }
@@ -163,8 +161,8 @@ public class MainActivity extends AppCompatActivity {
         updateStatusDisconnecting();
         appendLog("SYSTEM ACTION: Disconnecting from server...");
 
-        if (BciMediaService.getInstance() != null) {
-            BciMediaService.getInstance().disconnectMqtt();
+        if (BciMediaService.getActiveService() != null) {
+            BciMediaService.getActiveService().disconnectMqtt();
         } else {
             updateStatusOffline("Service stopped");
         }
@@ -208,16 +206,16 @@ public class MainActivity extends AppCompatActivity {
         boolean userDisconnected = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getBoolean(KEY_USER_DISCONNECTED, false);
 
-        if (BciMediaService.getInstance() != null) {
-            if (BciMediaService.getInstance().isMqttConnected()) {
+        if (BciMediaService.getActiveService() != null) {
+            if (BciMediaService.getActiveService().isMqttConnected()) {
                 updateStatusOnline();
             } else if (!userDisconnected) {
                 updateStatusConnecting();
-                BciMediaService.getInstance().connectMqtt();
+                BciMediaService.getActiveService().connectMqtt();
             } else {
                 updateStatusOffline("Disconnected");
             }
-            BciMediaService.getInstance().refreshMediaTelemetry();
+            BciMediaService.getActiveService().refreshMediaTelemetry();
         } else {
             updateStatusOffline(null);
         }
@@ -332,8 +330,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void openJioSaavn() {
-        if (BciMediaService.getInstance() != null) {
-            BciMediaService.getInstance().launchJioSaavn();
+        if (BciMediaService.getActiveService() != null) {
+            BciMediaService.getActiveService().launchJioSaavn();
             return;
         }
         String[] packages = {"com.jio.media.jiobeats", "com.jio.media.jiosaavn"};
@@ -440,8 +438,8 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         uiRefreshHandler.removeCallbacks(uiRefreshRunnable);
-        if (getInstance() == this) {
-            setInstance(null);
+        if (getActiveActivity() == this) {
+            setActiveActivity(null);
         }
     }
 
@@ -516,8 +514,8 @@ public class MainActivity extends AppCompatActivity {
                     .setPositiveButton("Change Username", (dialog, which) -> promptUsernameDialog(false))
                     .setNegativeButton("Disconnect", (dialog, which) -> {
                         updateStatusOffline("Name conflict");
-                        if (BciMediaService.getInstance() != null) {
-                            BciMediaService.getInstance().disconnectMqtt();
+                        if (BciMediaService.getActiveService() != null) {
+                            BciMediaService.getActiveService().disconnectMqtt();
                         }
                     })
                     .show();
@@ -614,8 +612,8 @@ public class MainActivity extends AppCompatActivity {
             }
             appendLog("DEVICE ID: Set to '" + cleaned + "' [ANDROID] UUID=" + deviceId.substring(0, Math.min(8, deviceId.length())) + "...");
 
-            if (BciMediaService.getInstance() != null) {
-                BciMediaService.getInstance().updateDeviceUsername(cleaned, selectedType, deviceId);
+            if (BciMediaService.getActiveService() != null) {
+                BciMediaService.getActiveService().updateDeviceUsername(cleaned, selectedType, deviceId);
             }
         });
 

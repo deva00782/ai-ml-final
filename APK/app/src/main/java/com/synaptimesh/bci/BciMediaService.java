@@ -82,14 +82,14 @@ public class BciMediaService extends NotificationListenerService {
     private static final long PUBLISH_THROTTLE_MS = 1000;
     private static final long NOTIFICATION_THROTTLE_MS = 2000;
 
-    private static BciMediaService instance;
+    private static BciMediaService activeService;
 
-    public static synchronized BciMediaService getInstance() {
-        return instance;
+    public static synchronized BciMediaService getActiveService() {
+        return activeService;
     }
 
-    private static synchronized void setInstance(BciMediaService service) {
-        instance = service;
+    private static synchronized void setActiveService(BciMediaService service) {
+        activeService = service;
     }
 
     private MqttClient mqttClient;
@@ -150,7 +150,7 @@ public class BciMediaService extends NotificationListenerService {
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
-        setInstance(this);
+        setActiveService(this);
         loadDeviceUsername();
         setupMediaSessionListeners();
 
@@ -171,7 +171,7 @@ public class BciMediaService extends NotificationListenerService {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        setInstance(null);
+        setActiveService(null);
 
         stopProgressUpdates();
         cleanupMediaSessionListeners();
@@ -204,8 +204,8 @@ public class BciMediaService extends NotificationListenerService {
         android.content.SharedPreferences prefs = getSharedPreferences(MainActivity.PREFS_NAME, MODE_PRIVATE);
         prefs.edit().putBoolean(MainActivity.KEY_USER_DISCONNECTED, false).apply();
         this.isRemoteActive = true;
-        if (MainActivity.getInstance() != null) {
-            MainActivity.getInstance().updateStatusConnecting();
+        if (MainActivity.getActiveActivity() != null) {
+            MainActivity.getActiveActivity().updateStatusConnecting();
         }
         connectToMqttBroker();
     }
@@ -217,8 +217,8 @@ public class BciMediaService extends NotificationListenerService {
         this.lastPublishedMqttTitle = null;
         this.lastPublishedMqttArtist = null;
         this.lastPublishedMqttStatus = null;
-        if (MainActivity.getInstance() != null) {
-            MainActivity.getInstance().updateStatusDisconnecting();
+        if (MainActivity.getActiveActivity() != null) {
+            MainActivity.getActiveActivity().updateStatusDisconnecting();
         }
         new Thread(() -> {
             if (mqttClient != null) {
@@ -237,16 +237,16 @@ public class BciMediaService extends NotificationListenerService {
                 }
                 mqttClient = null;
             }
-            if (MainActivity.getInstance() != null) {
-                MainActivity.getInstance().updateStatusOffline("Disconnected");
+            if (MainActivity.getActiveActivity() != null) {
+                MainActivity.getActiveActivity().updateStatusOffline("Disconnected");
             }
         }).start();
     }
 
     private void connectToMqttBroker() {
         if (mqttClient != null && mqttClient.isConnected()) {
-            if (MainActivity.getInstance() != null) {
-                MainActivity.getInstance().updateStatusOnline();
+            if (MainActivity.getActiveActivity() != null) {
+                MainActivity.getActiveActivity().updateStatusOnline();
             }
             return;
         }
@@ -278,8 +278,8 @@ public class BciMediaService extends NotificationListenerService {
             @Override
             public void connectComplete(boolean reconnect, String serverURI) {
                 log("MQTT Connected! Reconnect=" + reconnect + " | URI=" + serverURI);
-                if (MainActivity.getInstance() != null) {
-                    MainActivity.getInstance().updateStatusOnline(); 
+                if (MainActivity.getActiveActivity() != null) {
+                    MainActivity.getActiveActivity().updateStatusOnline(); 
                 }
                 subscribeAfterConnect();
             }
@@ -320,8 +320,8 @@ public class BciMediaService extends NotificationListenerService {
     private void handleMqttConnectionLost(Throwable cause) {
         String errorMsg = (cause != null ? cause.getMessage() : "Unknown cause");
         Log.w(TAG, "MQTT Connection lost: " + errorMsg);
-        if (MainActivity.getInstance() != null) {
-            MainActivity.getInstance().updateStatusOffline(errorMsg);
+        if (MainActivity.getActiveActivity() != null) {
+            MainActivity.getActiveActivity().updateStatusOffline(errorMsg);
         }
 
         if (isRemoteActive) {
@@ -412,8 +412,8 @@ public class BciMediaService extends NotificationListenerService {
         String title = json.optString(KEY_TITLE, query);
 
         publishAck(officialCommand);
-        if (MainActivity.getInstance() != null) {
-            MainActivity.getInstance().runOnUiThread(() -> MainActivity.getInstance().processIncomingBciPacket(officialCommand, query));
+        if (MainActivity.getActiveActivity() != null) {
+            MainActivity.getActiveActivity().runOnUiThread(() -> MainActivity.getActiveActivity().processIncomingBciPacket(officialCommand, query));
         }
 
         new Thread(() -> translateBrainwaveToMedia(officialCommand, query, songUrl, title)).start();
@@ -434,13 +434,13 @@ public class BciMediaService extends NotificationListenerService {
 
         if ("ERROR".equalsIgnoreCase(status) || "USERNAME_TAKEN".equalsIgnoreCase(error)) {
             log("REGISTRATION REJECTED: " + (message.isEmpty() ? "Username taken" : message));
-            if (MainActivity.getInstance() != null) {
-                MainActivity.getInstance().runOnUiThread(() -> MainActivity.getInstance().onUsernameConflict(username, message));
+            if (MainActivity.getActiveActivity() != null) {
+                MainActivity.getActiveActivity().runOnUiThread(() -> MainActivity.getActiveActivity().onUsernameConflict(username, message));
             }
         } else if ("SUCCESS".equalsIgnoreCase(status)) {
             log("REGISTRATION APPROVED: " + (message.isEmpty() ? "Verified" : message));
-            if (MainActivity.getInstance() != null) {
-                MainActivity.getInstance().runOnUiThread(() -> MainActivity.getInstance().onUsernameApproved(username));
+            if (MainActivity.getActiveActivity() != null) {
+                MainActivity.getActiveActivity().runOnUiThread(() -> MainActivity.getActiveActivity().onUsernameApproved(username));
             }
         }
     }
@@ -453,13 +453,13 @@ public class BciMediaService extends NotificationListenerService {
         Log.d(TAG, "Status Topic Received: " + topic + " | Payload: " + payload);
 
         if (statusRaw.equals("ONLINE")) {
-            if (MainActivity.getInstance() != null) {
-                MainActivity.getInstance().updatePythonStatus(true);
+            if (MainActivity.getActiveActivity() != null) {
+                MainActivity.getActiveActivity().updatePythonStatus(true);
             }
             log("Python Pipeline Status: ONLINE");
         } else if (statusRaw.equals("OFFLINE")) {
-            if (MainActivity.getInstance() != null) {
-                MainActivity.getInstance().updatePythonStatus(false);
+            if (MainActivity.getActiveActivity() != null) {
+                MainActivity.getActiveActivity().updatePythonStatus(false);
             }
             log("Python Pipeline Status: OFFLINE");
         } else {
@@ -680,8 +680,8 @@ public class BciMediaService extends NotificationListenerService {
     private void ensureJioSaavnForeground() {
         if (BciAccessibilityService.getActiveService() == null) {
             Log.w(TAG, "Accessibility Service is not enabled. Launching JioSaavn directly.");
-            if (MainActivity.getInstance() != null) {
-                MainActivity.getInstance().appendLog("SYSTEM WARNING: Accessibility Service is not enabled.");
+            if (MainActivity.getActiveActivity() != null) {
+                MainActivity.getActiveActivity().appendLog("SYSTEM WARNING: Accessibility Service is not enabled.");
             }
             launchJioSaavn();
             return;
@@ -690,8 +690,8 @@ public class BciMediaService extends NotificationListenerService {
         boolean isForeground = BciAccessibilityService.getActiveService().checkJioSaavnForeground();
         if (!isForeground) {
             Log.d(TAG, "Universal Rule: JioSaavn is not in foreground. Launching directly...");
-            if (MainActivity.getInstance() != null) {
-                MainActivity.getInstance().appendLog("SYSTEM: JioSaavn not in foreground. Launching directly...");
+            if (MainActivity.getActiveActivity() != null) {
+                MainActivity.getActiveActivity().appendLog("SYSTEM: JioSaavn not in foreground. Launching directly...");
             }
             BciAccessibilityService.getActiveService().launchJioSaavn();
 
@@ -1249,8 +1249,8 @@ public class BciMediaService extends NotificationListenerService {
 
     private void log(String message) {
         Log.d(TAG, message);
-        if (MainActivity.getInstance() != null) {
-            MainActivity.getInstance().appendLog(message);
+        if (MainActivity.getActiveActivity() != null) {
+            MainActivity.getActiveActivity().appendLog(message);
         }
     }
 
@@ -1524,7 +1524,7 @@ public class BciMediaService extends NotificationListenerService {
     }
 
     private void updateUiDisplay(String status, String currentTime, String totalTime, int progressPercent, int volumePercent) {
-        if (MainActivity.getInstance() != null) {
+        if (MainActivity.getActiveActivity() != null) {
             final String fTitle = lastKnownTitle;
             final String fArtist = lastKnownArtist;
             final String fStatus = status;
@@ -1532,8 +1532,8 @@ public class BciMediaService extends NotificationListenerService {
             final String fTotal = totalTime;
             final int fProg = progressPercent;
             final int fVol = volumePercent;
-            MainActivity.getInstance().runOnUiThread(() ->
-                MainActivity.getInstance().updateMediaDisplay(fTitle, fArtist, fStatus, fCurrent, fTotal, fProg, fVol)
+            MainActivity.getActiveActivity().runOnUiThread(() ->
+                MainActivity.getActiveActivity().updateMediaDisplay(fTitle, fArtist, fStatus, fCurrent, fTotal, fProg, fVol)
             );
         }
     }
